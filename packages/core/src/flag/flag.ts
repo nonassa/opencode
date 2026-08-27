@@ -54,6 +54,9 @@ export const Flag = {
   get OPENCODE_DISABLE_PROJECT_CONFIG() {
     return truthy("OPENCODE_DISABLE_PROJECT_CONFIG")
   },
+  get OPENCODE_CONFIG_CONTENT_ONLY() {
+    return truthy("OPENCODE_CONFIG_CONTENT_ONLY")
+  },
   get OPENCODE_EXPERIMENTAL_REFERENCES() {
     return enabledByExperimental("OPENCODE_EXPERIMENTAL_REFERENCES")
   },

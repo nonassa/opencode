@@ -54,6 +54,23 @@ Config sources are loaded in this order (later sources override earlier ones):
 
 This means project configs can override global defaults, and global configs can override remote organizational defaults. Managed settings override everything.
 
+For embedded runtimes and reproducible automation that require one exclusive
+configuration authority, set `OPENCODE_CONFIG_CONTENT_ONLY=1` together with
+`OPENCODE_CONFIG_CONTENT`. In this mode OpenCode loads only the inline config:
+it does not read remote, global, custom, project, `.opencode`, account, managed
+file, or macOS managed-preference configuration. It also skips configuration
+directory discovery and dependency installation. The flag without non-empty
+`OPENCODE_CONFIG_CONTENT` fails at startup.
+
+```bash
+OPENCODE_CONFIG_CONTENT_ONLY=1 \
+OPENCODE_CONFIG_CONTENT='{"model":"example/model"}' \
+opencode run "Hello world"
+```
+
+This mode is process-scoped and does not modify configuration files or another
+OpenCode installation.
+
 :::note
 The `.opencode` and `~/.config/opencode` directories use **plural names** for subdirectories: `agents/`, `commands/`, `modes/`, `plugins/`, `skills/`, `tools/`, and `themes/`. Singular names (e.g., `agent/`) are also supported for backwards compatibility.
 :::

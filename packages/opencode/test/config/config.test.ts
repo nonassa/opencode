@@ -96,12 +96,13 @@ const configLayer = (
     auth?: Layer.Layer<Auth.Service>
     account?: Layer.Layer<Account.Service>
     client?: HttpClient.HttpClient
+    npm?: Layer.Layer<Npm.Service>
   } = {},
 ) =>
   LayerNode.compile(LayerNode.group([Config.node, FSUtil.node, Env.node, CrossSpawnSpawner.node]), [
     [Auth.node, options.auth ?? AuthTest.empty],
     [Account.node, options.account ?? AccountTest.empty],
-    [Npm.node, NpmTest.noop],
+    [Npm.node, options.npm ?? NpmTest.noop],
     [httpClient, Layer.succeed(HttpClient.HttpClient, options.client ?? unexpectedHttp)],
   ])
 
@@ -1934,6 +1935,85 @@ describe("OPENCODE_CONFIG_CONTENT token substitution", () => {
         }),
       )
     }),
+  )
+})
+
+describe("OPENCODE_CONFIG_CONTENT_ONLY", () => {
+  const isolated = configIt({
+    auth: Layer.mock(Auth.Service)({
+      all: () => Effect.die("content-only mode read authentication configuration"),
+    }),
+    account: Layer.mock(Account.Service)({
+      active: () => Effect.die("content-only mode read account configuration"),
+    }),
+    npm: Layer.mock(Npm.Service)({
+      install: () => Effect.die("content-only mode attempted dependency installation"),
+    }),
+  })
+
+  isolated.instance(
+    "uses the inline configuration as the only authority",
+    () =>
+      withGlobalConfig({ config: { model: "hostile-global/model", plugin: ["hostile-global"] } }, () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          yield* writeConfigEffect(path.join(test.directory, ".opencode"), {
+            model: "hostile-local/model",
+            plugin: ["hostile-local"],
+          })
+          yield* writeManagedSettingsEffect({
+            model: "hostile-managed/model",
+            plugin: ["hostile-managed"],
+          })
+
+          const managed = {
+            $schema: "https://opencode.ai/config.json",
+            model: "managed/gpt-5",
+            enabled_providers: ["managed"],
+            provider: {
+              managed: {
+                name: "Managed",
+                npm: "@ai-sdk/openai-compatible",
+                options: {
+                  baseURL: "https://gateway.example.com/v1",
+                  apiKey: "managed-token",
+                  headers: { "X-Request-Namespace": "managed" },
+                },
+                models: { "gpt-5": { name: "GPT-5" } },
+              },
+            },
+            plugin: ["file:///opt/managed/identity-plugin.mjs"],
+          }
+
+          yield* withProcessEnvs(
+            {
+              OPENCODE_CONFIG_CONTENT_ONLY: "true",
+              OPENCODE_CONFIG_CONTENT: JSON.stringify(managed),
+              OPENCODE_PERMISSION: JSON.stringify({ "*": "deny" }),
+            },
+            Effect.gen(function* () {
+              const config = yield* Config.use.get()
+              expect(config.model).toBe(managed.model)
+              expect(config.enabled_providers).toEqual(managed.enabled_providers)
+              expect(config.provider).toEqual(managed.provider)
+              expect(config.plugin).toEqual(managed.plugin)
+              expect(config.permission).toBeUndefined()
+              expect(yield* Config.use.directories()).toEqual([])
+            }),
+          )
+        }),
+      ),
+    { config: { model: "hostile-project/model", plugin: ["hostile-project"] } },
+  )
+
+  isolated.instance("requires inline content", () =>
+    withProcessEnvs(
+      { OPENCODE_CONFIG_CONTENT_ONLY: "true", OPENCODE_CONFIG_CONTENT: undefined },
+      Config.use.get().pipe(
+        Effect.exit,
+        Effect.map((exit) => expect(Exit.isFailure(exit)).toBe(true)),
+      ),
+    ),
   )
 })
 

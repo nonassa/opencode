@@ -243,6 +243,75 @@ const layer = Layer.effect(
       return yield* loadConfig(text, { path: filepath }, env)
     })
 
+    const finalize = Effect.fnUntraced(function* (input: {
+      result: Info
+      directories: string[]
+      deps: Fiber.Fiber<void>[]
+      consoleManagedProviders: Set<string>
+      activeOrgName?: string
+      applyEnvironment: boolean
+    }) {
+      const result = input.result
+      for (const [name, mode] of Object.entries(result.mode ?? {})) {
+        result.agent = mergeDeep(result.agent ?? {}, {
+          [name]: {
+            ...mode,
+            mode: "primary" as const,
+          },
+        })
+      }
+
+      if (input.applyEnvironment && Flag.OPENCODE_PERMISSION) {
+        try {
+          result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OPENCODE_PERMISSION))
+        } catch (err) {
+          yield* Effect.logWarning("OPENCODE_PERMISSION contains invalid JSON, skipping", { err })
+        }
+      }
+
+      if (result.tools) {
+        const perms: Record<string, ConfigPermissionV1.Action> = {}
+        for (const [tool, enabled] of Object.entries(result.tools)) {
+          const action: ConfigPermissionV1.Action = enabled ? "allow" : "deny"
+          if (tool === "write" || tool === "edit" || tool === "patch") {
+            perms.edit = action
+            continue
+          }
+          perms[tool] = action
+        }
+        result.permission = mergeDeep(perms, result.permission ?? {})
+      }
+
+      if (!result.username) {
+        try {
+          result.username = os.userInfo().username || "user"
+        } catch (err) {
+          yield* Effect.logWarning("failed to read system username, using fallback", { err })
+          result.username = "user"
+        }
+      }
+
+      if (result.autoshare === true && !result.share) result.share = "auto"
+
+      if (input.applyEnvironment && Flag.OPENCODE_DISABLE_AUTOCOMPACT) {
+        result.compaction = { ...result.compaction, auto: false }
+      }
+      if (input.applyEnvironment && Flag.OPENCODE_DISABLE_PRUNE) {
+        result.compaction = { ...result.compaction, prune: false }
+      }
+
+      return {
+        config: result,
+        directories: input.directories,
+        deps: input.deps,
+        consoleState: {
+          consoleManagedProviders: Array.from(input.consoleManagedProviders),
+          activeOrgName: input.activeOrgName,
+          switchableOrgCount: 0,
+        },
+      }
+    })
+
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
       let result: Info = {}
       // Seed the default global config with the schema for editor completion, but avoid writing when the user
@@ -313,6 +382,28 @@ const layer = Layer.effect(
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
       function* (ctx: InstanceContext) {
+        if (Flag.OPENCODE_CONFIG_CONTENT_ONLY) {
+          const content = process.env.OPENCODE_CONFIG_CONTENT
+          if (!content) {
+            return yield* Effect.die(new Error("OPENCODE_CONFIG_CONTENT_ONLY requires OPENCODE_CONFIG_CONTENT"))
+          }
+          const source = "OPENCODE_CONFIG_CONTENT"
+          const result: Info = yield* loadConfig(content, { dir: ctx.directory, source })
+          result.agent ??= {}
+          result.mode ??= {}
+          result.plugin ??= []
+          result.plugin_origins = ConfigPlugin.deduplicatePluginOrigins(
+            result.plugin.map((spec) => ({ spec, source, scope: "local" as const })),
+          )
+          return yield* finalize({
+            result,
+            directories: [],
+            deps: [],
+            consoleManagedProviders: new Set(),
+            applyEnvironment: false,
+          })
+        }
+
         const auth = yield* authSvc.all().pipe(Effect.orDie)
 
         let result: Info = {}
@@ -533,66 +624,14 @@ const layer = Layer.effect(
           )
         }
 
-        for (const [name, mode] of Object.entries(result.mode ?? {})) {
-          result.agent = mergeDeep(result.agent ?? {}, {
-            [name]: {
-              ...mode,
-              mode: "primary" as const,
-            },
-          })
-        }
-
-        if (Flag.OPENCODE_PERMISSION) {
-          try {
-            result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OPENCODE_PERMISSION))
-          } catch (err) {
-            yield* Effect.logWarning("OPENCODE_PERMISSION contains invalid JSON, skipping", { err })
-          }
-        }
-
-        if (result.tools) {
-          const perms: Record<string, ConfigPermissionV1.Action> = {}
-          for (const [tool, enabled] of Object.entries(result.tools)) {
-            const action: ConfigPermissionV1.Action = enabled ? "allow" : "deny"
-            if (tool === "write" || tool === "edit" || tool === "patch") {
-              perms.edit = action
-              continue
-            }
-            perms[tool] = action
-          }
-          result.permission = mergeDeep(perms, result.permission ?? {})
-        }
-
-        if (!result.username) {
-          try {
-            result.username = os.userInfo().username || "user"
-          } catch (err) {
-            yield* Effect.logWarning("failed to read system username, using fallback", { err })
-            result.username = "user"
-          }
-        }
-
-        if (result.autoshare === true && !result.share) {
-          result.share = "auto"
-        }
-
-        if (Flag.OPENCODE_DISABLE_AUTOCOMPACT) {
-          result.compaction = { ...result.compaction, auto: false }
-        }
-        if (Flag.OPENCODE_DISABLE_PRUNE) {
-          result.compaction = { ...result.compaction, prune: false }
-        }
-
-        return {
-          config: result,
+        return yield* finalize({
+          result,
           directories,
           deps,
-          consoleState: {
-            consoleManagedProviders: Array.from(consoleManagedProviders),
-            activeOrgName,
-            switchableOrgCount: 0,
-          },
-        }
+          consoleManagedProviders,
+          activeOrgName,
+          applyEnvironment: true,
+        })
       },
       Effect.provideService(FSUtil.Service, fs),
     )
