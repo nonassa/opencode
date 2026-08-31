@@ -8,6 +8,8 @@ import { QuestionV1 } from "@opencode-ai/schema/question-v1"
 
 export const Option = QuestionV1.Option
 export type Option = typeof Option.Type
+export const OrientationSection = QuestionV1.OrientationSection
+export type OrientationSection = typeof OrientationSection.Type
 export const Info = QuestionV1.Info
 export type Info = typeof Info.Type
 export const Prompt = QuestionV1.Prompt
@@ -48,6 +50,7 @@ interface State {
 export interface Interface {
   readonly ask: (input: {
     sessionID: SessionID
+    orientation?: ReadonlyArray<OrientationSection>
     questions: ReadonlyArray<Info>
     tool?: Tool
   }) => Effect.Effect<ReadonlyArray<Answer>, RejectedError>
@@ -86,6 +89,7 @@ const layer = Layer.effect(
 
     const ask = Effect.fn("Question.ask")(function* (input: {
       sessionID: SessionID
+      orientation?: ReadonlyArray<OrientationSection>
       questions: ReadonlyArray<Info>
       tool?: Tool
     }) {
@@ -97,6 +101,7 @@ const layer = Layer.effect(
       const info: Request = {
         id,
         sessionID: input.sessionID,
+        orientation: input.orientation,
         questions: input.questions,
         tool: input.tool,
       }

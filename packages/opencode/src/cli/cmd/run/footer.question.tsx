@@ -354,13 +354,6 @@ export function RunQuestionBody(props: {
           }
         >
           <box width="100%" flexGrow={1} flexShrink={1} paddingLeft={1} gap={1}>
-            <box>
-              <text fg={props.theme.text} wrapMode="word">
-                {info()?.question}
-                {info()?.multiple ? " (select all that apply)" : ""}
-              </text>
-            </box>
-
             <box flexGrow={1} flexShrink={1}>
               <scrollbox
                 width="100%"
@@ -373,6 +366,35 @@ export function RunQuestionBody(props: {
                 }}
               >
                 <box width="100%" flexDirection="column">
+                  <For each={props.request.orientation ?? []}>
+                    {(section) => (
+                      <box flexDirection="column" paddingBottom={1}>
+                        <text fg={props.theme.text} wrapMode="word">
+                          {section.label}
+                        </text>
+                        <For each={section.items}>
+                          {(item) => (
+                            <box flexDirection="column" paddingLeft={1}>
+                              <text fg={props.theme.text} wrapMode="word">
+                                {item.label}
+                              </text>
+                              <box paddingLeft={2}>
+                                <text fg={props.theme.muted} wrapMode="word">
+                                  {item.description}
+                                </text>
+                              </box>
+                            </box>
+                          )}
+                        </For>
+                      </box>
+                    )}
+                  </For>
+                  <box paddingBottom={1}>
+                    <text fg={props.theme.text} wrapMode="word">
+                      {info()?.question}
+                      {info()?.multiple ? " (select all that apply)" : ""}
+                    </text>
+                  </box>
                   <For each={info()?.options ?? []}>
                     {(item, index) => {
                       const active = () => state().selected === index()

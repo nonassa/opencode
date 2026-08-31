@@ -17,6 +17,18 @@ export const Option = Schema.Struct({
   description: Schema.String.annotate({ description: "Explanation of choice" }),
 }).annotate({ identifier: "QuestionOption" })
 
+export const OrientationItem = Schema.Struct({
+  itemId: Schema.String,
+  label: Schema.String,
+  description: Schema.String,
+}).annotate({ identifier: "QuestionOrientationItem" })
+
+export const OrientationSection = Schema.Struct({
+  sectionId: Schema.String,
+  label: Schema.String,
+  items: Schema.Array(OrientationItem),
+}).annotate({ identifier: "QuestionOrientationSection" })
+
 const base = {
   question: Schema.String.annotate({ description: "Complete question" }),
   header: Schema.String.annotate({ description: "Very short label (max 30 chars)" }),
@@ -35,6 +47,7 @@ export const Tool = Schema.Struct({ messageID: SessionV1.MessageID, callID: Sche
 export const Request = Schema.Struct({
   id: ID,
   sessionID: SessionID,
+  orientation: Schema.optional(Schema.Array(OrientationSection)),
   questions: Schema.Array(Info).annotate({ description: "Questions to ask" }),
   tool: Schema.optional(Tool),
 }).annotate({ identifier: "QuestionRequest" })

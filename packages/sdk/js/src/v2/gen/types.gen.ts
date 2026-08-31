@@ -692,6 +692,18 @@ export type SessionStatus =
       type: "busy"
     }
 
+export type QuestionOrientationItem = {
+  itemId: string
+  label: string
+  description: string
+}
+
+export type QuestionOrientationSection = {
+  sectionId: string
+  label: string
+  items: Array<QuestionOrientationItem>
+}
+
 export type QuestionOption = {
   /**
    * Display text (1-5 words, concise)
@@ -1511,6 +1523,7 @@ export type GlobalEvent = {
         properties: {
           id: string
           sessionID: string
+          orientation?: Array<QuestionOrientationSection>
           /**
            * Questions to ask
            */
@@ -2452,6 +2465,7 @@ export type PtyForbiddenError = {
 export type QuestionRequest = {
   id: string
   sessionID: string
+  orientation?: Array<QuestionOrientationSection>
   /**
    * Questions to ask
    */
@@ -5942,6 +5956,7 @@ export type QuestionAsked = {
   data: {
     id: string
     sessionID: string
+    orientation?: Array<QuestionOrientationSection>
     /**
      * Questions to ask
      */
@@ -6951,6 +6966,7 @@ export type EventQuestionAsked = {
   properties: {
     id: string
     sessionID: string
+    orientation?: Array<QuestionOrientationSection>
     /**
      * Questions to ask
      */

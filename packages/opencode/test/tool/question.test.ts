@@ -55,6 +55,13 @@ describe("tool.question", () => {
 
         const fiber = yield* tool.execute({ catalogQuestionIds: ["starting-direction"] }, ctx).pipe(Effect.forkScoped)
         const item = yield* pending(question)
+        expect(item.orientation).toEqual([
+          {
+            sectionId: "strategy-styles",
+            label: "Strategy styles",
+            items: [{ itemId: "trend-following", label: "Trend following", description: "Explore trends." }],
+          },
+        ])
         expect(item.questions).toEqual([
           {
             question: "What should this strategy be about?",

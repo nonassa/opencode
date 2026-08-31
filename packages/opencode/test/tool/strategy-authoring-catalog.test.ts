@@ -2,13 +2,33 @@ import { createHash } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
-import { loadStrategyAuthoringQuestions } from "../../src/tool/strategy-authoring-catalog"
+import {
+  loadStrategyAuthoringInteraction,
+  loadStrategyAuthoringQuestions,
+} from "../../src/tool/strategy-authoring-catalog"
 import { tmpdir } from "../fixture/fixture"
 
 const base = {
   catalogVersion: "1.0.0",
   locale: "en_US",
-  sections: [],
+  sections: [
+    {
+      sectionId: "strategy-styles",
+      label: "Strategy styles",
+      items: [{ itemId: "trend-following", label: "Trend following", description: "Explore public trend systems." }],
+    },
+    {
+      sectionId: "example-prompts",
+      label: "Ways to begin",
+      items: [
+        {
+          itemId: "start-turtle",
+          label: "Start from Turtle Trading",
+          description: "I want something like Turtle Trading.",
+        },
+      ],
+    },
+  ],
   questions: [
     {
       questionId: "starting-direction",
@@ -54,6 +74,23 @@ async function writeProjection(directory: string, projection: unknown, hashSourc
 }
 
 describe("Strategy Authoring catalog question adapter", () => {
+  test("loads exact orientation before catalog questions", async () => {
+    await using tmp = await tmpdir()
+    await writeProjection(tmp.path, base)
+    expect(loadStrategyAuthoringInteraction(tmp.path, ["starting-direction"])).toEqual({
+      orientation: base.sections,
+      questions: [
+        {
+          question: "What should this strategy be about?",
+          header: "Strategy intent",
+          options: [{ label: "Trend", description: "Use a public trend pattern." }],
+          multiple: false,
+          custom: true,
+        },
+      ],
+    })
+  })
+
   test("loads exact questions in catalog order", async () => {
     await using tmp = await tmpdir()
     await writeProjection(tmp.path, base)
@@ -91,6 +128,16 @@ describe("Strategy Authoring catalog question adapter", () => {
     expect(() => loadStrategyAuthoringQuestions(tmp.path, ["starting-direction"])).toThrow("must be an object")
     const invalid = [
       { ...base, sections: null },
+      { ...base, sections: [null] },
+      { ...base, sections: [{ ...base.sections[0], sectionId: "" }] },
+      { ...base, sections: [base.sections[0], base.sections[0]] },
+      { ...base, sections: [{ ...base.sections[0], items: [] }] },
+      { ...base, sections: [{ ...base.sections[0], items: [null] }] },
+      { ...base, sections: [{ ...base.sections[0], items: [{ ...base.sections[0].items[0], itemId: "" }] }] },
+      {
+        ...base,
+        sections: [{ ...base.sections[0], items: [base.sections[0].items[0], base.sections[0].items[0]] }],
+      },
       { ...base, questions: [null] },
       { ...base, questions: [{ ...base.questions[0], questionId: "" }] },
       { ...base, questions: [base.questions[0], base.questions[0]] },

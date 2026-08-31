@@ -1211,6 +1211,66 @@ test("direct question body separates single-select checkmark from label", async 
   }
 })
 
+test("direct question body renders managed orientation before intake", async () => {
+  const request = {
+    id: "question-1",
+    sessionID: "session-1",
+    orientation: [
+      {
+        sectionId: "strategy-styles",
+        label: "Strategy styles",
+        items: [
+          {
+            itemId: "trend-following",
+            label: "Trend following",
+            description: "Explore Turtle Trading and moving-average systems.",
+          },
+        ],
+      },
+      {
+        sectionId: "example-prompts",
+        label: "Ways to begin",
+        items: [
+          {
+            itemId: "start-turtle",
+            label: "Start from Turtle Trading",
+            description: "I want something like Turtle Trading.",
+          },
+        ],
+      },
+    ],
+    questions: [
+      {
+        question: "What should this strategy be about?",
+        header: "Strategy intent",
+        options: [{ label: "Trend following", description: "Begin with a public trend-following pattern." }],
+      },
+    ],
+  } as QuestionRequest
+
+  const app = await testRender(
+    () => (
+      <box width={100} height={18}>
+        <RunQuestionBody request={request} theme={RUN_THEME_FALLBACK.footer} onReply={() => {}} onReject={() => {}} />
+      </box>
+    ),
+    { width: 100, height: 18 },
+  )
+
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Strategy styles")
+    expect(frame).toContain("Trend following")
+    expect(frame).toContain("Explore Turtle Trading and moving-average systems.")
+    expect(frame).toContain("Ways to begin")
+    expect(frame).toContain("Start from Turtle Trading")
+    expect(frame.indexOf("Strategy styles")).toBeLessThan(frame.indexOf("What should this strategy be about?"))
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 // OpenTUI currently segfaults while tearing down this textarea-backed keymap renderer.
 // Re-enable after the runtime fix.
 test.skip("direct custom answer submits through keymap return binding", async () => {

@@ -19,10 +19,20 @@ type CatalogQuestion = {
   options: CatalogOption[]
 }
 
+type CatalogOrientationSection = {
+  sectionId: string
+  label: string
+  items: Array<{
+    itemId: string
+    label: string
+    description: string
+  }>
+}
+
 type Projection = {
   catalogVersion: string
   locale: string
-  sections: unknown[]
+  sections: CatalogOrientationSection[]
   questions: CatalogQuestion[]
   effects: {
     createsStrategyRules: false
@@ -55,6 +65,38 @@ function parseProjection(value: unknown): Projection {
   if (!Array.isArray(source.sections) || !Array.isArray(source.questions)) {
     throw new Error("Strategy Authoring orientation sections and questions must be arrays")
   }
+  const sectionIds = new Set<string>()
+  const itemIds = new Set<string>()
+  const sections = source.sections.map((candidate, sectionIndex) => {
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error(`sections[${sectionIndex}] must be an object`)
+    }
+    const section = candidate as Record<string, unknown>
+    const sectionId = text(section.sectionId, `sections[${sectionIndex}].sectionId`)
+    if (sectionIds.has(sectionId)) throw new Error(`Duplicate orientation section '${sectionId}'`)
+    sectionIds.add(sectionId)
+    if (!Array.isArray(section.items) || section.items.length === 0) {
+      throw new Error(`Orientation section '${sectionId}' must contain items`)
+    }
+    return {
+      sectionId,
+      label: text(section.label, `sections[${sectionIndex}].label`),
+      items: section.items.map((candidateItem, itemIndex) => {
+        if (candidateItem === null || typeof candidateItem !== "object" || Array.isArray(candidateItem)) {
+          throw new Error(`sections[${sectionIndex}].items[${itemIndex}] must be an object`)
+        }
+        const item = candidateItem as Record<string, unknown>
+        const itemId = text(item.itemId, `sections[${sectionIndex}].items[${itemIndex}].itemId`)
+        if (itemIds.has(itemId)) throw new Error(`Duplicate orientation item '${itemId}'`)
+        itemIds.add(itemId)
+        return {
+          itemId,
+          label: text(item.label, `sections[${sectionIndex}].items[${itemIndex}].label`),
+          description: text(item.description, `sections[${sectionIndex}].items[${itemIndex}].description`),
+        }
+      }),
+    }
+  })
   const questionIds = new Set<string>()
   const questions = source.questions.map((candidate, questionIndex) => {
     if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
@@ -107,7 +149,7 @@ function parseProjection(value: unknown): Projection {
   const projection = {
     catalogVersion: text(source.catalogVersion, "catalogVersion"),
     locale: text(source.locale, "locale"),
-    sections: source.sections,
+    sections,
     questions,
     effects: {
       createsStrategyRules: false as const,
@@ -119,7 +161,7 @@ function parseProjection(value: unknown): Projection {
   return { ...projection, projectionHash } as Projection
 }
 
-export function loadStrategyAuthoringQuestions(directory: string, questionIds: readonly string[]) {
+export function loadStrategyAuthoringInteraction(directory: string, questionIds: readonly string[]) {
   if (questionIds.length === 0 || new Set(questionIds).size !== questionIds.length) {
     throw new Error("Catalog question IDs must be non-empty and unique")
   }
@@ -140,13 +182,18 @@ export function loadStrategyAuthoringQuestions(directory: string, questionIds: r
   if (selectedIndexes.some((index, position) => position > 0 && index <= selectedIndexes[position - 1]!)) {
     throw new Error("Strategy Authoring catalog questions must retain catalog order")
   }
-  return selected.map((question) => {
-    return {
+  return {
+    orientation: projection.sections,
+    questions: selected.map((question) => ({
       question: question.question,
       header: question.header,
       options: question.options.map((option) => ({ label: option.label, description: option.description })),
       multiple: false,
       custom: true,
-    }
-  })
+    })),
+  }
+}
+
+export function loadStrategyAuthoringQuestions(directory: string, questionIds: readonly string[]) {
+  return loadStrategyAuthoringInteraction(directory, questionIds).questions
 }

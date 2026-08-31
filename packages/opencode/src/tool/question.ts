@@ -3,7 +3,7 @@ import * as Tool from "./tool"
 import { Question } from "../question"
 import DESCRIPTION from "./question.txt"
 import { InstanceState } from "@/effect/instance-state"
-import { loadStrategyAuthoringQuestions } from "./strategy-authoring-catalog"
+import { loadStrategyAuthoringInteraction } from "./strategy-authoring-catalog"
 
 export const Parameters = Schema.Struct({
   questions: Schema.optional(
@@ -39,12 +39,14 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
-          const questions =
+          const interaction =
             params.catalogQuestionIds !== undefined
-              ? loadStrategyAuthoringQuestions((yield* InstanceState.context).directory, params.catalogQuestionIds)
-              : params.questions!
+              ? loadStrategyAuthoringInteraction((yield* InstanceState.context).directory, params.catalogQuestionIds)
+              : { orientation: undefined, questions: params.questions! }
+          const questions = interaction.questions
           const answers = yield* question.ask({
             sessionID: ctx.sessionID,
+            orientation: interaction.orientation,
             questions,
             tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
           })
