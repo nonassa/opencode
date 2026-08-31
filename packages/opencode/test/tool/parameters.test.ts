@@ -56,11 +56,14 @@ describe("tool parameters", () => {
     test("inlines named child schemas for provider compatibility", () => {
       const schema = toJsonSchema(Question)
       expect(schema).not.toHaveProperty("$defs")
-      expect(schema.anyOf?.[0]).toMatchObject({
+      expect(schema).toMatchObject({
+        type: "object",
         properties: {
           questions: { items: { properties: { options: { items: { properties: { label: { type: "string" } } } } } } },
+          catalogQuestionIds: { items: { type: "string" } },
         },
       })
+      expect(schema).not.toHaveProperty("anyOf")
     })
 
     test("preserves required nullable fields", () => {
@@ -207,17 +210,29 @@ describe("tool parameters", () => {
           },
         ],
       })
-      expect("questions" in parsed && parsed.questions.length).toBe(1)
+      expect(parsed.questions?.length).toBe(1)
     })
     test("accepts catalog question IDs", () => {
       const parsed = parse(Question, { catalogQuestionIds: ["starting-direction", "choice-ownership"] })
-      expect("catalogQuestionIds" in parsed && parsed.catalogQuestionIds).toEqual([
-        "starting-direction",
-        "choice-ownership",
-      ])
+      expect(parsed.catalogQuestionIds).toEqual(["starting-direction", "choice-ownership"])
     })
     test("rejects missing questions", () => {
       expect(accepts(Question, {})).toBe(false)
+    })
+    test("rejects ordinary and catalog questions in the same invocation", () => {
+      expect(
+        accepts(Question, {
+          questions: [
+            {
+              question: "pick one",
+              header: "Header",
+              custom: false,
+              options: [{ label: "a", description: "desc" }],
+            },
+          ],
+          catalogQuestionIds: ["starting-direction"],
+        }),
+      ).toBe(false)
     })
   })
 

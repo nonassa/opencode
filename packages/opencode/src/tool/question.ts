@@ -5,16 +5,24 @@ import DESCRIPTION from "./question.txt"
 import { InstanceState } from "@/effect/instance-state"
 import { loadStrategyAuthoringQuestions } from "./strategy-authoring-catalog"
 
-export const Parameters = Schema.Union([
-  Schema.Struct({
-    questions: Schema.mutable(Schema.Array(Question.Prompt)).annotate({ description: "Questions to ask" }),
-  }),
-  Schema.Struct({
-    catalogQuestionIds: Schema.mutable(Schema.Array(Schema.String)).annotate({
+export const Parameters = Schema.Struct({
+  questions: Schema.optional(
+    Schema.mutable(Schema.Array(Question.Prompt)).annotate({ description: "Questions to ask" }),
+  ),
+  catalogQuestionIds: Schema.optional(
+    Schema.mutable(Schema.Array(Schema.String)).annotate({
       description: "Exact Strategy Authoring question IDs from the managed workspace catalog",
     }),
+  ),
+}).check(
+  Schema.makeFilter((params) => {
+    const hasQuestions = params.questions !== undefined
+    const hasCatalogQuestionIds = params.catalogQuestionIds !== undefined
+    return hasQuestions === hasCatalogQuestionIds
+      ? "Exactly one of questions or catalogQuestionIds must be provided"
+      : undefined
   }),
-])
+)
 
 type Metadata = {
   answers: ReadonlyArray<Question.Answer>
@@ -32,9 +40,9 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
           const questions =
-            "catalogQuestionIds" in params
+            params.catalogQuestionIds !== undefined
               ? loadStrategyAuthoringQuestions((yield* InstanceState.context).directory, params.catalogQuestionIds)
-              : params.questions
+              : params.questions!
           const answers = yield* question.ask({
             sessionID: ctx.sessionID,
             questions,
