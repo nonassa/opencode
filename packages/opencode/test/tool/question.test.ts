@@ -8,6 +8,9 @@ import { Agent } from "../../src/agent/agent"
 import { Truncate } from "@/tool/truncate"
 import { testEffect } from "../lib/effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
+import { createHash } from "node:crypto"
+import { mkdir, writeFile } from "node:fs/promises"
+import path from "node:path"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-session"),
@@ -42,6 +45,94 @@ const pending = Effect.fn("QuestionToolTest.pending")(function* (question: Quest
 })
 
 describe("tool.question", () => {
+  it.instance(
+    "renders exact StratCraft catalog-backed questions",
+    () =>
+      Effect.gen(function* () {
+        const question = yield* Question.Service
+        const toolInfo = yield* QuestionTool
+        const tool = yield* toolInfo.init()
+
+        const fiber = yield* tool.execute({ catalogQuestionIds: ["starting-direction"] }, ctx).pipe(Effect.forkScoped)
+        const item = yield* pending(question)
+        expect(item.questions).toEqual([
+          {
+            question: "What should this strategy be about?",
+            header: "Strategy intent",
+            options: [
+              { label: "Trend following", description: "Begin with a public trend-following pattern." },
+              { label: "Open-source starting point", description: "Inspect a supported public algorithm." },
+            ],
+            multiple: false,
+            custom: true,
+          },
+        ])
+        yield* question.reply({ requestID: item.id, answers: [["A custom direction"]] })
+        const result = yield* Fiber.join(fiber)
+        expect(result.output).toContain('"What should this strategy be about?"="A custom direction"')
+        expect(result.metadata.questions).toEqual(item.questions)
+      }),
+    {
+      init: (directory) =>
+        Effect.promise(async () => {
+          const projection = {
+            catalogVersion: "1.0.0",
+            locale: "en_US",
+            sections: [
+              {
+                sectionId: "strategy-styles",
+                label: "Strategy styles",
+                items: [{ itemId: "trend-following", label: "Trend following", description: "Explore trends." }],
+              },
+            ],
+            questions: [
+              {
+                questionId: "starting-direction",
+                header: "Strategy intent",
+                question: "What should this strategy be about?",
+                selectionMode: "single",
+                customAnswerPolicy: "allowed",
+                options: [
+                  {
+                    optionId: "trend-following",
+                    label: "Trend following",
+                    description: "Begin with a public trend-following pattern.",
+                  },
+                  {
+                    optionId: "open-source-starting-point",
+                    label: "Open-source starting point",
+                    description: "Inspect a supported public algorithm.",
+                  },
+                ],
+              },
+            ],
+            effects: { createsStrategyRules: false, allowsExecutableAction: false },
+          }
+          const canonical = (value: unknown): string => {
+            if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+            if (value !== null && typeof value === "object") {
+              return `{${Object.entries(value as Record<string, unknown>)
+                .sort(([left], [right]) => left.localeCompare(right))
+                .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`)
+                .join(",")}}`
+            }
+            return JSON.stringify(value)
+          }
+          const content = {
+            ...projection,
+            projectionHash: createHash("sha256").update(canonical(projection), "utf8").digest("hex"),
+          }
+          const instructionDirectory = path.join(directory, "instructions")
+          await mkdir(instructionDirectory, { recursive: true })
+          await writeFile(
+            path.join(instructionDirectory, "strategy-authoring-orientation.json"),
+            `${JSON.stringify(content)}\n`,
+            "utf8",
+          )
+        }),
+    },
+  )
+
   it.instance("should successfully execute with valid question parameters", () =>
     Effect.gen(function* () {
       const question = yield* Question.Service

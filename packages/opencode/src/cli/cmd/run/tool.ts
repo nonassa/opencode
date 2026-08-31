@@ -829,7 +829,7 @@ function scrollQuestionStart(_: ToolProps<typeof QuestionTool>): string {
 }
 
 function scrollQuestionFinal(p: ToolProps<typeof QuestionTool>): string {
-  const q = p.input.questions ?? []
+  const q = p.metadata.questions ?? ("questions" in p.input ? p.input.questions : undefined) ?? []
   const a = p.metadata.answers ?? []
   const time = span(p.frame.state)
   if (q.length === 0) {

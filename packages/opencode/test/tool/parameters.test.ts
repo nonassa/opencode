@@ -56,7 +56,7 @@ describe("tool parameters", () => {
     test("inlines named child schemas for provider compatibility", () => {
       const schema = toJsonSchema(Question)
       expect(schema).not.toHaveProperty("$defs")
-      expect(schema).toMatchObject({
+      expect(schema.anyOf?.[0]).toMatchObject({
         properties: {
           questions: { items: { properties: { options: { items: { properties: { label: { type: "string" } } } } } } },
         },
@@ -207,7 +207,14 @@ describe("tool parameters", () => {
           },
         ],
       })
-      expect(parsed.questions.length).toBe(1)
+      expect("questions" in parsed && parsed.questions.length).toBe(1)
+    })
+    test("accepts catalog question IDs", () => {
+      const parsed = parse(Question, { catalogQuestionIds: ["starting-direction", "choice-ownership"] })
+      expect("catalogQuestionIds" in parsed && parsed.catalogQuestionIds).toEqual([
+        "starting-direction",
+        "choice-ownership",
+      ])
     })
     test("rejects missing questions", () => {
       expect(accepts(Question, {})).toBe(false)
