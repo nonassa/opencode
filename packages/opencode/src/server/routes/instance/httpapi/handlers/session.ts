@@ -94,12 +94,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const managedModel = Effect.fn("SessionHttpApi.managedModel")(function* (ctx: {
-      params: { sessionID: SessionID }
       payload: typeof ManagedModelSwitchPayload.Type
     }) {
       if (process.env.OPENCODE_CONFIG_CONTENT_ONLY !== "1" || process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL !== "1")
         return yield* new HttpApiError.Forbidden({})
-      yield* requireSession(ctx.params.sessionID)
       const target = yield* Effect.try({
         try: () => managedModelTarget(ctx.payload),
         catch: () => new HttpApiError.BadRequest({}),

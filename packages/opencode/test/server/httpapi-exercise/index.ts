@@ -1165,6 +1165,20 @@ const scenarios: Scenario[] = [
     .seeded((ctx) => ctx.session({ title: "Status session" }))
     .json(200, object),
   http.protected
+    .post("/managed/model", "managed.model.forbidden")
+    .at((ctx) => ({
+      path: "/managed/model",
+      headers: ctx.headers(),
+      body: {
+        providerID: "openrouter",
+        modelID: "google/gemini-3.7-flash",
+        protocol: "openai-compatible",
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey: "exercise-secret",
+      },
+    }))
+    .status(403),
+  http.protected
     .post("/session", "session.create")
     .mutating()
     .at((ctx) => ({ path: "/session", headers: ctx.headers(), body: { title: "Created session" } }))

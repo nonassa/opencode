@@ -103,7 +103,7 @@ export const SessionPaths = {
   abort: `${root}/:sessionID/abort`,
   share: `${root}/:sessionID/share`,
   init: `${root}/:sessionID/init`,
-  managedModel: `${root}/:sessionID/managed-model`,
+  managedModel: "/managed/model",
   summarize: `${root}/:sessionID/summarize`,
   prompt: `${root}/:sessionID/message`,
   promptAsync: `${root}/:sessionID/prompt_async`,
@@ -122,7 +122,6 @@ export const SessionApi = HttpApi.make("session")
     HttpApiGroup.make("session")
       .add(
         HttpApiEndpoint.post("managedModel", SessionPaths.managedModel, {
-          params: { sessionID: SessionID },
           payload: ManagedModelSwitchPayload,
           success: ManagedModelSwitchResult,
           error: [HttpApiError.BadRequest, HttpApiError.Forbidden, ApiNotFoundError],

@@ -1599,6 +1599,30 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("uses the latest managed default for a session's first provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const transitions = yield* SessionModelTransition.Service
+      yield* transitions.queueDefault({
+        model: model,
+        ref: { id: ModelV2.ID.make("initial"), providerID: ProviderV2.ID.make("fake") },
+      })
+      yield* transitions.queueDefault({
+        model: replacementModel,
+        ref: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Use the latest managed default" }), resume: false })
+
+      requests.length = 0
+      response = [LLMEvent.stepStart({ index: 0 }), LLMEvent.finish({ reason: "stop" })]
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => request.model)).toEqual([replacementModel])
+      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "replacement", providerID: "fake" })
+    }),
+  )
+
   it.effect("keeps a managed switch pending through the complete active tool run", () =>
     Effect.gen(function* () {
       yield* setup

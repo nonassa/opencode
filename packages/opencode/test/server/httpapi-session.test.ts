@@ -236,18 +236,17 @@ afterEach(async () => {
 
 describe("session HttpApi", () => {
   it.instance(
-    "queues an authenticated managed model transition without returning its credential",
+    "queues an authenticated managed model transition before any session exists",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
-        const session = yield* createSession({ title: "managed model" })
         const previousContentOnly = process.env.OPENCODE_CONFIG_CONTENT_ONLY
         const previousControl = process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
         process.env.OPENCODE_CONFIG_CONTENT_ONLY = "1"
         process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL = "1"
         const response = yield* request(
-          pathFor(SessionPaths.managedModel, { sessionID: session.id }),
+          SessionPaths.managedModel,
           {
             method: "POST",
             headers,
@@ -270,7 +269,7 @@ describe("session HttpApi", () => {
           ),
         )
         const body = yield* response.text
-        expect(response.status).toBe(200)
+        expect(response.status, body).toBe(200)
         expect(JSON.parse(body)).toEqual({
           status: "queued",
           providerID: "openrouter",
