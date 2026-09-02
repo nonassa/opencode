@@ -74,6 +74,18 @@ export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
+export const ManagedModelSwitchPayload = Schema.Struct({
+  providerID: ProviderV2.ID,
+  modelID: ModelV2.ID,
+  protocol: Schema.Literals(["openai-compatible", "anthropic"]),
+  baseURL: Schema.String,
+  apiKey: Schema.optional(Schema.String),
+})
+export const ManagedModelSwitchResult = Schema.Struct({
+  status: Schema.Literal("queued"),
+  providerID: Schema.String,
+  modelID: Schema.String,
+})
 
 export const SessionPaths = {
   list: root,
@@ -91,6 +103,7 @@ export const SessionPaths = {
   abort: `${root}/:sessionID/abort`,
   share: `${root}/:sessionID/share`,
   init: `${root}/:sessionID/init`,
+  managedModel: `${root}/:sessionID/managed-model`,
   summarize: `${root}/:sessionID/summarize`,
   prompt: `${root}/:sessionID/message`,
   promptAsync: `${root}/:sessionID/prompt_async`,
@@ -107,6 +120,20 @@ export const SessionPaths = {
 export const SessionApi = HttpApi.make("session")
   .add(
     HttpApiGroup.make("session")
+      .add(
+        HttpApiEndpoint.post("managedModel", SessionPaths.managedModel, {
+          params: { sessionID: SessionID },
+          payload: ManagedModelSwitchPayload,
+          success: ManagedModelSwitchResult,
+          error: [HttpApiError.BadRequest, HttpApiError.Forbidden, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.managedModel",
+            summary: "Queue a managed session model transition",
+            description: "Queues an authenticated in-memory model route for the next session run boundary.",
+          }),
+        ),
+      )
       .add(
         HttpApiEndpoint.get("list", SessionPaths.list, {
           query: ListQuery,

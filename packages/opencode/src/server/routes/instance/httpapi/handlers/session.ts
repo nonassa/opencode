@@ -16,6 +16,10 @@ import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
+import { SessionModelTransition } from "@opencode-ai/core/session/model-transition"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
+import { Location } from "@opencode-ai/core/location"
+import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { InstanceState } from "@/effect/instance-state"
@@ -28,6 +32,7 @@ import {
   ForkPayload,
   InitPayload,
   ListQuery,
+  ManagedModelSwitchPayload,
   MessagesQuery,
   PermissionResponsePayload,
   PromptPayload,
@@ -36,6 +41,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
+import { managedModelTarget } from "./managed-model"
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 
@@ -59,6 +65,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
+    const locations = yield* LocationServiceMap.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -84,6 +91,24 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
       return yield* requireSession(ctx.params.sessionID)
+    })
+
+    const managedModel = Effect.fn("SessionHttpApi.managedModel")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ManagedModelSwitchPayload.Type
+    }) {
+      if (process.env.OPENCODE_CONFIG_CONTENT_ONLY !== "1" || process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL !== "1")
+        return yield* new HttpApiError.Forbidden({})
+      yield* requireSession(ctx.params.sessionID)
+      const target = yield* Effect.try({
+        try: () => managedModelTarget(ctx.payload),
+        catch: () => new HttpApiError.BadRequest({}),
+      })
+      const directory = (yield* InstanceState.context).directory
+      yield* SessionModelTransition.Service.use((service) => service.queueDefault(target)).pipe(
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
+      )
+      return { status: "queued" as const, providerID: ctx.payload.providerID, modelID: ctx.payload.modelID }
     })
 
     const children = Effect.fn("SessionHttpApi.children")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -414,6 +439,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("list", list)
       .handle("status", status)
       .handle("get", get)
+      .handle("managedModel", managedModel)
       .handle("children", children)
       .handle("todo", todo)
       .handle("diff", diff)

@@ -10,6 +10,7 @@ import { Heap } from "@/cli/heap"
 import { AppRuntime } from "@/effect/app-runtime"
 import { Effect } from "effect"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+import { removeManagedControlDescriptor, writeManagedControlDescriptor } from "@/server/managed-control-descriptor"
 
 Heap.start()
 
@@ -26,6 +27,7 @@ GlobalBus.on("event", (event) => {
 })
 
 let server: Awaited<ReturnType<typeof Server.listen>> | undefined
+let managedControlDescriptor: string | undefined
 
 export const rpc = {
   async fetch(input: { url: string; method: string; headers: Record<string, string>; body?: string }) {
@@ -54,6 +56,7 @@ export const rpc = {
   async server(input: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     if (server) await server.stop(true)
     server = await Server.listen(input)
+    managedControlDescriptor = await writeManagedControlDescriptor(server.url)
     return { url: server.url.toString() }
   },
   async checkUpgrade(input: { directory: string }) {
@@ -72,6 +75,7 @@ export const rpc = {
   async shutdown() {
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)
+    await removeManagedControlDescriptor(managedControlDescriptor)
     process.off("unhandledRejection", onUnhandledRejection)
     process.off("uncaughtException", onUncaughtException)
   },

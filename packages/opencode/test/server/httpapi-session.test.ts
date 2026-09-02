@@ -235,6 +235,52 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  it.instance(
+    "queues an authenticated managed model transition without returning its credential",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "managed model" })
+        const previousContentOnly = process.env.OPENCODE_CONFIG_CONTENT_ONLY
+        const previousControl = process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
+        process.env.OPENCODE_CONFIG_CONTENT_ONLY = "1"
+        process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL = "1"
+        const response = yield* request(
+          pathFor(SessionPaths.managedModel, { sessionID: session.id }),
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              providerID: "openrouter",
+              modelID: "google/gemini-3.7-pro",
+              protocol: "openai-compatible",
+              baseURL: "https://openrouter.ai/api/v1",
+              apiKey: "never-return-this-secret",
+            }),
+          },
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (previousContentOnly === undefined) delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
+              else process.env.OPENCODE_CONFIG_CONTENT_ONLY = previousContentOnly
+              if (previousControl === undefined) delete process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
+              else process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL = previousControl
+            }),
+          ),
+        )
+        const body = yield* response.text
+        expect(response.status).toBe(200)
+        expect(JSON.parse(body)).toEqual({
+          status: "queued",
+          providerID: "openrouter",
+          modelID: "google/gemini-3.7-pro",
+        })
+        expect(body).not.toContain("never-return-this-secret")
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.effect("maps busy sessions to public session busy errors", () =>
     Effect.gen(function* () {
       const sessionID = SessionID.descending()

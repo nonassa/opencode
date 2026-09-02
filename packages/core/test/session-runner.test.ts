@@ -35,6 +35,7 @@ import { SessionRunCoordinator } from "@opencode-ai/core/session/run-coordinator
 import { SessionRunner } from "@opencode-ai/core/session/runner"
 import * as SessionRunnerLLM from "@opencode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
+import { SessionModelTransition } from "@opencode-ai/core/session/model-transition"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { ApplicationTools } from "@opencode-ai/core/tool/application-tools"
 import { AgentV2 } from "@opencode-ai/core/agent"
@@ -229,6 +230,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
   [LayerNodePlatform.llmClient, client],
   [SessionRunnerModel.node, models],
+  [SessionModelTransition.node, SessionModelTransition.layer],
   [SystemContextRegistry.node, systemContext],
   [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
   [SkillGuidance.node, skillGuidance],
@@ -265,6 +267,7 @@ const it = testEffect(
       ToolRegistry.toolsNode,
       echoNode,
       SessionRunnerModel.node,
+      SessionModelTransition.node,
       SystemContextRegistry.node,
       SkillGuidance.node,
       ReferenceGuidance.node,
@@ -278,6 +281,7 @@ const it = testEffect(
       [LayerNodePlatform.llmClient, client],
       [PermissionV2.node, permission],
       [SessionRunnerModel.node, models],
+      [SessionModelTransition.node, SessionModelTransition.layer],
       [SystemContextRegistry.node, systemContext],
       [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
       [SkillGuidance.node, skillGuidance],
@@ -1569,6 +1573,68 @@ describe("SessionRunnerLLM", () => {
         ["Initial context"],
       ])
       expect(systemTexts(requests[1]!)).toContain("Replacement context")
+    }),
+  )
+
+  it.effect("applies one pending managed model before the next provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const transitions = yield* SessionModelTransition.Service
+      yield* transitions.queue({
+        sessionID,
+        target: {
+          model: replacementModel,
+          ref: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+        },
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Use the managed route" }), resume: false })
+
+      requests.length = 0
+      response = [LLMEvent.stepStart({ index: 0 }), LLMEvent.finish({ reason: "stop" })]
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => request.model)).toEqual([replacementModel])
+      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "replacement", providerID: "fake" })
+    }),
+  )
+
+  it.effect("keeps a managed switch pending through the complete active tool run", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const transitions = yield* SessionModelTransition.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Run a tool" }), resume: false })
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-managed-boundary", name: "echo", input: { text: "hello" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [LLMEvent.stepStart({ index: 0 }), LLMEvent.finish({ reason: "stop" })],
+      ]
+      toolExecutionGate = yield* Deferred.make<void>()
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      toolExecutionsReady = 1
+      const run = yield* Effect.forkChild(session.resume(sessionID))
+      yield* Deferred.await(toolExecutionsStarted)
+      yield* transitions.queue({
+        sessionID,
+        target: {
+          model: replacementModel,
+          ref: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+        },
+      })
+      yield* Deferred.succeed(toolExecutionGate, undefined)
+      yield* Fiber.join(run)
+      expect(requests.map((request) => request.model)).toEqual([model, model])
+
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Use the new route" }), resume: false })
+      responses = [[LLMEvent.stepStart({ index: 0 }), LLMEvent.finish({ reason: "stop" })]]
+      yield* session.resume(sessionID)
+      expect(requests.at(-1)?.model).toBe(replacementModel)
     }),
   )
 
