@@ -596,6 +596,7 @@ export class RunFooter implements FooterApi {
         return this.idle()
       }
 
+      this.renderer.requestRender()
       await this.renderer.idle().catch(() => {})
     })
   }

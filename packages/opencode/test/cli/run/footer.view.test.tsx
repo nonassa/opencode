@@ -349,6 +349,10 @@ test("managed model event replaces the rendered footer model", async () => {
     await footer.idle()
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("deepseek/deepseek-v4-flash")
+    await app.flush()
+    const beforeExplicitRepaint = app.renderer.frameId
+    await footer.idle()
+    expect(app.renderer.frameId).toBeGreaterThan(beforeExplicitRepaint)
 
     footer.event({
       type: "model",
