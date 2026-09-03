@@ -118,6 +118,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             type: "model-switched",
             metadata: event.metadata,
             model: event.data.model,
+            transitionRevision: event.data.transitionRevision,
             time: { created: event.data.timestamp },
           }),
         )

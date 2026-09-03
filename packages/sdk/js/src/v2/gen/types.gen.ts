@@ -848,6 +848,7 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           model: ModelRef
+          transitionRevision?: number
         }
       }
     | {
@@ -2554,6 +2555,10 @@ export type ProviderAuthError1 = {
   }
 }
 
+export type EffectHttpApiErrorForbidden = {
+  _tag: "Forbidden"
+}
+
 export type NotFoundError = {
   name: "NotFoundError"
   data: {
@@ -2971,10 +2976,6 @@ export type ProjectCopyError = {
   }
 }
 
-export type EffectHttpApiErrorForbidden = {
-  _tag: "Forbidden"
-}
-
 export type EventTuiPromptAppend2 = {
   id: string
   type: "tui.prompt.append"
@@ -3342,6 +3343,7 @@ export type SyncEventSessionNextModelSwitched = {
       sessionID: string
       messageID: string
       model: ModelRef
+      transitionRevision?: number
     }
   }
 }
@@ -3982,6 +3984,7 @@ export type SessionMessageModelSwitched = {
   }
   type: "model-switched"
   model: ModelRef
+  transitionRevision?: number
 }
 
 export type SessionMessageUser = {
@@ -4213,6 +4216,7 @@ export type SessionNextModelSwitched = {
     sessionID: string
     messageID: string
     model: ModelRef
+    transitionRevision?: number
   }
 }
 
@@ -6282,6 +6286,7 @@ export type EventSessionNextModelSwitched = {
     sessionID: string
     messageID: string
     model: ModelRef
+    transitionRevision?: number
   }
 }
 
@@ -9451,6 +9456,125 @@ export type ProviderOauthCallbackResponses = {
 }
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
+
+export type SessionManagedModelSnapshotData = {
+  body?: never
+  path?: never
+  query?: {
+    sessionID?: string
+  }
+  url: "/managed/model"
+}
+
+export type SessionManagedModelSnapshotErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+}
+
+export type SessionManagedModelSnapshotError =
+  SessionManagedModelSnapshotErrors[keyof SessionManagedModelSnapshotErrors]
+
+export type SessionManagedModelSnapshotResponses = {
+  /**
+   * Success
+   */
+  200: {
+    revision: number
+    current?: {
+      providerID: string
+      modelID: string
+    }
+    next?: {
+      providerID: string
+      modelID: string
+    }
+  }
+}
+
+export type SessionManagedModelSnapshotResponse =
+  SessionManagedModelSnapshotResponses[keyof SessionManagedModelSnapshotResponses]
+
+export type SessionManagedModelData = {
+  body?: {
+    providerID: string
+    modelID: string
+    protocol: "openai-compatible" | "anthropic"
+    baseURL: string
+    apiKey?: string
+  }
+  path?: never
+  query?: never
+  url: "/managed/model"
+}
+
+export type SessionManagedModelErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionManagedModelError = SessionManagedModelErrors[keyof SessionManagedModelErrors]
+
+export type SessionManagedModelResponses = {
+  /**
+   * Success
+   */
+  200: {
+    status: "queued"
+    revision: number
+    providerID: string
+    modelID: string
+  }
+}
+
+export type SessionManagedModelResponse = SessionManagedModelResponses[keyof SessionManagedModelResponses]
+
+export type SessionManagedModelEventsData = {
+  body?: never
+  path?: never
+  query?: {
+    sessionID?: string
+  }
+  url: "/managed/model/events"
+}
+
+export type SessionManagedModelEventsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+}
+
+export type SessionManagedModelEventsError = SessionManagedModelEventsErrors[keyof SessionManagedModelEventsErrors]
+
+export type SessionManagedModelEventsResponses = {
+  /**
+   * Success
+   */
+  200: string
+}
+
+export type SessionManagedModelEventsResponse =
+  SessionManagedModelEventsResponses[keyof SessionManagedModelEventsResponses]
 
 export type SessionListData = {
   body?: never

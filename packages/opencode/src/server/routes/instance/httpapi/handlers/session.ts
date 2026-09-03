@@ -17,11 +17,13 @@ import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionModelTransition } from "@opencode-ai/core/session/model-transition"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
+import * as Sse from "effect/unstable/encoding/Sse"
 import { InstanceState } from "@/effect/instance-state"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/unstable/httpapi"
@@ -33,6 +35,7 @@ import {
   InitPayload,
   ListQuery,
   ManagedModelSwitchPayload,
+  ManagedModelProjectionQuery,
   MessagesQuery,
   PermissionResponsePayload,
   PromptPayload,
@@ -50,6 +53,15 @@ const tryParseJson = (text: string) =>
     try: () => JSON.parse(text) as unknown,
     catch: () => new HttpApiError.BadRequest({}),
   })
+
+function managedModelProjection(projection: SessionModelTransition.Projection) {
+  const ref = (model: ModelV2.Ref) => ({ providerID: model.providerID, modelID: model.id })
+  return {
+    revision: projection.revision,
+    ...(projection.current ? { current: ref(projection.current) } : {}),
+    ...(projection.next ? { next: ref(projection.next) } : {}),
+  }
+}
 
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
@@ -103,10 +115,53 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         catch: () => new HttpApiError.BadRequest({}),
       })
       const directory = (yield* InstanceState.context).directory
-      yield* SessionModelTransition.Service.use((service) => service.queueDefault(target)).pipe(
+      const revision = yield* SessionModelTransition.Service.use((service) => service.queueDefault(target)).pipe(
         Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
       )
-      return { status: "queued" as const, providerID: ctx.payload.providerID, modelID: ctx.payload.modelID }
+      return { status: "queued" as const, revision, providerID: ctx.payload.providerID, modelID: ctx.payload.modelID }
+    })
+
+    const managedModelSnapshot = Effect.fn("SessionHttpApi.managedModelSnapshot")(function* (ctx: {
+      query: typeof ManagedModelProjectionQuery.Type
+    }) {
+      if (process.env.OPENCODE_CONFIG_CONTENT_ONLY !== "1" || process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL !== "1")
+        return yield* new HttpApiError.Forbidden({})
+      const directory = (yield* InstanceState.context).directory
+      const projection = yield* SessionModelTransition.Service.use((service) =>
+        service.snapshot(ctx.query.sessionID),
+      ).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }))))
+      return managedModelProjection(projection)
+    })
+
+    const managedModelEvents = Effect.fn("SessionHttpApi.managedModelEvents")(function* (ctx: {
+      query: typeof ManagedModelProjectionQuery.Type
+    }) {
+      if (process.env.OPENCODE_CONFIG_CONTENT_ONLY !== "1" || process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL !== "1")
+        return yield* new HttpApiError.Forbidden({})
+      const directory = (yield* InstanceState.context).directory
+      const changes = yield* SessionModelTransition.Service.use((service) =>
+        Effect.succeed(service.changes(ctx.query.sessionID)),
+      ).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }))))
+      return HttpServerResponse.stream(
+        changes.pipe(
+          Stream.map((projection) => ({
+            _tag: "Event" as const,
+            event: "model",
+            id: String(projection.revision),
+            data: JSON.stringify(managedModelProjection(projection)),
+          })),
+          Stream.pipeThroughChannel(Sse.encode()),
+          Stream.encodeText,
+        ),
+        {
+          contentType: "text/event-stream",
+          headers: {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+          },
+        },
+      )
     })
 
     const children = Effect.fn("SessionHttpApi.children")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -438,6 +493,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("status", status)
       .handle("get", get)
       .handle("managedModel", managedModel)
+      .handle("managedModelSnapshot", managedModelSnapshot)
+      .handleRaw("managedModelEvents", managedModelEvents)
       .handle("children", children)
       .handle("todo", todo)
       .handle("diff", diff)

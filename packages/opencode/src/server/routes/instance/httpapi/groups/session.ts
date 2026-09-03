@@ -83,8 +83,21 @@ export const ManagedModelSwitchPayload = Schema.Struct({
 })
 export const ManagedModelSwitchResult = Schema.Struct({
   status: Schema.Literal("queued"),
+  revision: Schema.Int,
   providerID: Schema.String,
   modelID: Schema.String,
+})
+export const ManagedModelProjectionRef = Schema.Struct({
+  providerID: ProviderV2.ID,
+  modelID: ModelV2.ID,
+})
+export const ManagedModelProjection = Schema.Struct({
+  revision: Schema.Int,
+  current: Schema.optional(ManagedModelProjectionRef),
+  next: Schema.optional(ManagedModelProjectionRef),
+})
+export const ManagedModelProjectionQuery = Schema.Struct({
+  sessionID: Schema.optional(SessionID),
 })
 
 export const SessionPaths = {
@@ -104,6 +117,7 @@ export const SessionPaths = {
   share: `${root}/:sessionID/share`,
   init: `${root}/:sessionID/init`,
   managedModel: "/managed/model",
+  managedModelEvents: "/managed/model/events",
   summarize: `${root}/:sessionID/summarize`,
   prompt: `${root}/:sessionID/message`,
   promptAsync: `${root}/:sessionID/prompt_async`,
@@ -132,6 +146,20 @@ export const SessionApi = HttpApi.make("session")
             description: "Queues an authenticated in-memory model route for the next session run boundary.",
           }),
         ),
+      )
+      .add(
+        HttpApiEndpoint.get("managedModelSnapshot", SessionPaths.managedModel, {
+          query: ManagedModelProjectionQuery,
+          success: ManagedModelProjection,
+          error: HttpApiError.Forbidden,
+        }),
+      )
+      .add(
+        HttpApiEndpoint.get("managedModelEvents", SessionPaths.managedModelEvents, {
+          query: ManagedModelProjectionQuery,
+          success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+          error: HttpApiError.Forbidden,
+        }),
       )
       .add(
         HttpApiEndpoint.get("list", SessionPaths.list, {

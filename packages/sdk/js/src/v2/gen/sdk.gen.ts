@@ -197,6 +197,12 @@ import type {
   SessionInitResponses,
   SessionListErrors,
   SessionListResponses,
+  SessionManagedModelErrors,
+  SessionManagedModelEventsErrors,
+  SessionManagedModelEventsResponses,
+  SessionManagedModelResponses,
+  SessionManagedModelSnapshotErrors,
+  SessionManagedModelSnapshotResponses,
   SessionMessageErrors,
   SessionMessageResponses,
   SessionMessagesErrors,
@@ -3360,6 +3366,85 @@ export class Provider extends HeyApiClient {
 }
 
 export class Session2 extends HeyApiClient {
+  public managedModelSnapshot<ThrowOnError extends boolean = false>(
+    parameters?: {
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<
+      SessionManagedModelSnapshotResponses,
+      SessionManagedModelSnapshotErrors,
+      ThrowOnError
+    >({
+      url: "/managed/model",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Queue a managed session model transition
+   *
+   * Queues an authenticated in-memory model route for the next session run boundary.
+   */
+  public managedModel<ThrowOnError extends boolean = false>(
+    parameters?: {
+      providerID?: string
+      modelID?: string
+      protocol?: "openai-compatible" | "anthropic"
+      baseURL?: string
+      apiKey?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "providerID" },
+            { in: "body", key: "modelID" },
+            { in: "body", key: "protocol" },
+            { in: "body", key: "baseURL" },
+            { in: "body", key: "apiKey" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionManagedModelResponses, SessionManagedModelErrors, ThrowOnError>(
+      {
+        url: "/managed/model",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  public managedModelEvents<ThrowOnError extends boolean = false>(
+    parameters?: {
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "sessionID" }] }])
+    return (options?.client ?? this.client).sse.get<
+      SessionManagedModelEventsResponses,
+      SessionManagedModelEventsErrors,
+      ThrowOnError
+    >({
+      url: "/managed/model/events",
+      ...options,
+      ...params,
+    })
+  }
+
   /**
    * List sessions
    *

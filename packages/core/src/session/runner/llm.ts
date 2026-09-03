@@ -404,6 +404,7 @@ const layer = Layer.effect(
           messageID: SessionMessage.ID.create(),
           timestamp: yield* DateTime.now,
           model: transition.ref,
+          transitionRevision: transition.revision,
         })
       }
       yield* failInterruptedTools(input.sessionID)

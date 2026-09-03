@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { runInteractiveMode } from "@/cli/cmd/run/runtime"
 import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
+import type { ManagedModelProjection } from "@/cli/cmd/run/managed-model.transport"
 
 type SessionMessage = NonNullable<Awaited<ReturnType<OpencodeClient["session"]["messages"]>>["data"]>[number]
 
@@ -136,6 +137,161 @@ afterEach(() => {
 })
 
 describe("run interactive runtime", () => {
+  test("renders the latest managed model projection before the first session", async () => {
+    const events: unknown[] = []
+    const previousContentOnly = process.env.OPENCODE_CONFIG_CONTENT_ONLY
+    const previousControl = process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
+    process.env.OPENCODE_CONFIG_CONTENT_ONLY = "1"
+    process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL = "1"
+    const sdk = new OpencodeClient()
+    spyOn(sdk.config, "providers").mockImplementation(() => ok({ providers: [provider], default: {} }))
+    spyOn(sdk.app, "agents").mockImplementation(() => ok([]))
+    spyOn(sdk.experimental.resource, "list").mockImplementation(() => ok({}))
+    spyOn(sdk.command, "list").mockImplementation(() => ok([]))
+
+    await runInteractiveMode(
+      {
+        sdk,
+        directory: "/tmp",
+        sessionID: "",
+        resume: false,
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-5" },
+        variant: undefined,
+        files: [],
+        thinking: true,
+        backgroundSubagents: false,
+      },
+      {
+        createRuntimeLifecycle: async () => {
+          const output = footer()
+          output.event = (event) => events.push(event)
+          return {
+            footer: output,
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+          }
+        },
+        managedModelTransport: Promise.resolve({
+          subscribeManagedModel: async (input: {
+            fetch: typeof globalThis.fetch
+            directory: string
+            sessionID: () => string
+            onProjection: (projection: ManagedModelProjection) => void
+            onError?: (error: unknown) => void
+          }) => {
+            input.onProjection({
+              revision: 1,
+              next: { providerID: "openrouter", modelID: "google/gemini-3.7-flash" },
+            })
+            input.onProjection({
+              revision: 2,
+              current: { providerID: "openrouter", modelID: "deepseek/deepseek-v4-flash" },
+              next: { providerID: "openai", modelID: "gpt-5" },
+            })
+            input.onProjection({
+              revision: 1,
+              next: { providerID: "openrouter", modelID: "stale/model" },
+            })
+            return { close: () => Promise.resolve() }
+          },
+        }),
+        streamTransport: Promise.resolve({
+          createSessionTransport: async (input: { footer: FooterApi }) => {
+            setTimeout(() => input.footer.close(), 0)
+            return {
+              runPromptTurn: async () => {},
+              selectSubagent: () => {},
+              replayOnResize: async () => false,
+              close: async () => {},
+            }
+          },
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    ).finally(() => {
+      if (previousContentOnly === undefined) delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
+      else process.env.OPENCODE_CONFIG_CONTENT_ONLY = previousContentOnly
+      if (previousControl === undefined) delete process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
+      else process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL = previousControl
+    })
+
+    expect(events).toContainEqual({ type: "model", model: "Little Frank · OpenAI" })
+    expect(events).toContainEqual({
+      type: "stream.patch",
+      patch: { status: "next model openrouter/google/gemini-3.7-flash" },
+    })
+    expect(events).toContainEqual({
+      type: "stream.patch",
+      patch: { status: "current model openrouter/deepseek/deepseek-v4-flash; next model openai/gpt-5" },
+    })
+    expect(JSON.stringify(events)).not.toContain("stale/model")
+  })
+
+  test("does not expose managed model synchronization in standalone mode", async () => {
+    const previousContentOnly = process.env.OPENCODE_CONFIG_CONTENT_ONLY
+    const previousControl = process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
+    delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
+    delete process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
+    let subscriptions = 0
+    const sdk = new OpencodeClient()
+    spyOn(sdk.config, "providers").mockImplementation(() => ok({ providers: [provider], default: {} }))
+    spyOn(sdk.app, "agents").mockImplementation(() => ok([]))
+    spyOn(sdk.experimental.resource, "list").mockImplementation(() => ok({}))
+    spyOn(sdk.command, "list").mockImplementation(() => ok([]))
+
+    await runInteractiveMode(
+      {
+        sdk,
+        directory: "/tmp",
+        sessionID: "ses-standalone",
+        resume: false,
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-5" },
+        variant: undefined,
+        files: [],
+        thinking: true,
+        backgroundSubagents: false,
+      },
+      {
+        createRuntimeLifecycle: async () => ({
+          footer: footer(),
+          onResize: () => () => {},
+          refreshTheme: () => {},
+          resetForReplay: () => Promise.resolve(),
+          close: () => Promise.resolve(),
+        }),
+        managedModelTransport: Promise.resolve({
+          subscribeManagedModel: async () => {
+            subscriptions += 1
+            return { close: () => Promise.resolve() }
+          },
+        }),
+        streamTransport: Promise.resolve({
+          createSessionTransport: async (input: { footer: FooterApi }) => {
+            setTimeout(() => input.footer.close(), 0)
+            return {
+              runPromptTurn: async () => {},
+              selectSubagent: () => {},
+              replayOnResize: async () => false,
+              close: async () => {},
+            }
+          },
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    ).finally(() => {
+      if (previousContentOnly === undefined) delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
+      else process.env.OPENCODE_CONFIG_CONTENT_ONLY = previousContentOnly
+      if (previousControl === undefined) delete process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
+      else process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL = previousControl
+    })
+
+    expect(subscriptions).toBe(0)
+  })
+
   test("waits for provider metadata before eager replay transport bootstrap", async () => {
     const providersStarted = defer<void>()
     const providers = defer<void>()

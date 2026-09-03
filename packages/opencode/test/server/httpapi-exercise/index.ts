@@ -1178,6 +1178,8 @@ const scenarios: Scenario[] = [
       },
     }))
     .status(403),
+  http.protected.get("/managed/model", "managed.model.snapshot.forbidden").status(403),
+  http.protected.get("/managed/model/events", "managed.model.events.forbidden").status(403),
   http.protected
     .post("/session", "session.create")
     .mutating()

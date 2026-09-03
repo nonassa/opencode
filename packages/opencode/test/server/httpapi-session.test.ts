@@ -4,7 +4,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer } from "effect"
+import { Cause, Config, Effect, Exit, Layer, Queue, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -228,6 +228,19 @@ function requestJson<T>(path: string, init?: RequestInit) {
   return request(path, init).pipe(Effect.flatMap(json<T>))
 }
 
+const readManagedModelEvent = (reader: Queue.Dequeue<Uint8Array>) =>
+  Queue.take(reader).pipe(
+    Effect.timeoutOrElse({
+      duration: "5 seconds",
+      orElse: () => Effect.fail(new Error("timed out waiting for managed model event")),
+    }),
+    Effect.map((value) => {
+      const data = new TextDecoder().decode(value).match(/(?:^|\n)data: (.+)(?:\n|$)/)?.[1]
+      if (!data) throw new Error("managed model event did not contain data")
+      return JSON.parse(data) as unknown
+    }),
+  )
+
 afterEach(async () => {
   Flag.OPENCODE_EXPERIMENTAL_WORKSPACES = originalWorkspaces
   await disposeAllInstances()
@@ -245,9 +258,16 @@ describe("session HttpApi", () => {
         const previousControl = process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
         process.env.OPENCODE_CONFIG_CONTENT_ONLY = "1"
         process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL = "1"
-        const response = yield* request(
-          SessionPaths.managedModel,
-          {
+        const result = yield* Effect.gen(function* () {
+          const initial = yield* requestJson<unknown>(SessionPaths.managedModel, { headers })
+          const events = yield* request(SessionPaths.managedModelEvents, { headers })
+          const reader = yield* Queue.unbounded<Uint8Array>()
+          yield* events.stream.pipe(
+            Stream.runForEach((value) => Queue.offer(reader, value)),
+            Effect.forkScoped,
+          )
+          const initialEvent = yield* readManagedModelEvent(reader)
+          const response = yield* request(SessionPaths.managedModel, {
             method: "POST",
             headers,
             body: JSON.stringify({
@@ -257,8 +277,12 @@ describe("session HttpApi", () => {
               baseURL: "https://openrouter.ai/api/v1",
               apiKey: "never-return-this-secret",
             }),
-          },
-        ).pipe(
+          })
+          const body = yield* response.text
+          const queuedEvent = yield* readManagedModelEvent(reader)
+          const snapshot = yield* requestJson<unknown>(SessionPaths.managedModel, { headers })
+          return { initial, events, initialEvent, response, body, queuedEvent, snapshot }
+        }).pipe(
           Effect.ensuring(
             Effect.sync(() => {
               if (previousContentOnly === undefined) delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
@@ -268,14 +292,22 @@ describe("session HttpApi", () => {
             }),
           ),
         )
-        const body = yield* response.text
-        expect(response.status, body).toBe(200)
-        expect(JSON.parse(body)).toEqual({
+        expect(result.initial).toEqual({ revision: 0 })
+        expect(result.events.headers["content-type"]).toContain("text/event-stream")
+        expect(result.initialEvent).toEqual({ revision: 0 })
+        expect(result.response.status, result.body).toBe(200)
+        expect(JSON.parse(result.body)).toEqual({
           status: "queued",
+          revision: 1,
           providerID: "openrouter",
           modelID: "google/gemini-3.7-pro",
         })
-        expect(body).not.toContain("never-return-this-secret")
+        expect(result.snapshot).toEqual({
+          revision: 1,
+          next: { providerID: "openrouter", modelID: "google/gemini-3.7-pro" },
+        })
+        expect(result.queuedEvent).toEqual(result.snapshot)
+        expect(JSON.stringify(result)).not.toContain("never-return-this-secret")
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

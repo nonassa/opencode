@@ -1581,7 +1581,14 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       const transitions = yield* SessionModelTransition.Service
-      yield* transitions.queue({
+      const events = yield* EventV2.Service
+      const switched: unknown[] = []
+      yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === SessionEvent.ModelSwitched.type) switched.push(event.data)
+        }),
+      )
+      const revision = yield* transitions.queue({
         sessionID,
         target: {
           model: replacementModel,
@@ -1596,6 +1603,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.map((request) => request.model)).toEqual([replacementModel])
       expect((yield* session.get(sessionID)).model).toMatchObject({ id: "replacement", providerID: "fake" })
+      expect(switched).toContainEqual(expect.objectContaining({ transitionRevision: revision }))
     }),
   )
 
@@ -1612,7 +1620,11 @@ describe("SessionRunnerLLM", () => {
         model: replacementModel,
         ref: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
       })
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Use the latest managed default" }), resume: false })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Use the latest managed default" }),
+        resume: false,
+      })
 
       requests.length = 0
       response = [LLMEvent.stepStart({ index: 0 }), LLMEvent.finish({ reason: "stop" })]

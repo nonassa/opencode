@@ -55,6 +55,7 @@ type RunRuntimeInput = {
   replay?: boolean
   replayLimit?: number
   demo?: RunInput["demo"]
+  managedFetch?: typeof globalThis.fetch
 }
 
 type RunLocalInput = {
@@ -81,9 +82,12 @@ type StreamTransportModule = Pick<
   "createSessionTransport" | "formatUnknownError"
 >
 
+type ManagedModelTransportModule = Pick<Awaited<typeof import("./managed-model.transport")>, "subscribeManagedModel">
+
 export type RunRuntimeDeps = {
   createRuntimeLifecycle?: typeof createRuntimeLifecycle
   streamTransport?: Promise<StreamTransportModule>
+  managedModelTransport?: Promise<ManagedModelTransportModule>
 }
 
 type StreamState = {
@@ -134,6 +138,7 @@ type RuntimeState = {
   selectSubagent?: (sessionID: string | undefined) => void
   session?: Promise<void>
   stream?: Promise<StreamState>
+  managedRevision?: number
 }
 
 function hasSession(input: RunRuntimeInput, state: RuntimeState) {
@@ -208,6 +213,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     sessionTitle: ctx.sessionTitle,
     agent: ctx.agent,
   }
+  let restartManagedModel = () => Promise.resolve()
   const ensureSession = () => {
     if (!input.resolveSession || state.sessionID) {
       return Promise.resolve()
@@ -221,6 +227,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       state.sessionID = next.sessionID
       state.sessionTitle = next.sessionTitle ?? state.sessionTitle
       state.agent = next.agent
+      void restartManagedModel()
     })
     return state.session
   }
@@ -364,6 +371,51 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     },
   })
   const footer = shell.footer
+  const managed =
+    process.env.OPENCODE_CONFIG_CONTENT_ONLY === "1" && process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL === "1"
+  const managedTransport = managed
+    ? (deps.managedModelTransport ?? (input.managedFetch ? import("./managed-model.transport") : undefined))
+    : undefined
+  let managedSubscription: Promise<{ close: () => Promise<void> }> | undefined
+  restartManagedModel = async () => {
+    await managedSubscription?.then((item) => item.close()).catch(() => {})
+    managedSubscription = managedTransport?.then((mod) =>
+      mod.subscribeManagedModel({
+        fetch: input.managedFetch ?? globalThis.fetch,
+        directory: ctx.directory,
+        sessionID: () => state.sessionID,
+        onProjection: (projection) => {
+          if (state.managedRevision !== undefined && projection.revision < state.managedRevision) return
+          state.managedRevision = projection.revision
+          const selected = projection.next ?? projection.current
+          if (!selected) return
+          state.model = selected
+          state.activeVariant = undefined
+          state.variants = variantsFor(state.providers, selected)
+          footer.event({ type: "variants", variants: state.variants, current: state.activeVariant })
+          footer.event({ type: "model", model: formatModelLabel(selected, state.activeVariant, state.providers) })
+          const current = projection.current
+            ? `${projection.current.providerID}/${projection.current.modelID}`
+            : undefined
+          const next = projection.next ? `${projection.next.providerID}/${projection.next.modelID}` : undefined
+          footer.event({
+            type: "stream.patch",
+            patch: {
+              status:
+                current && next
+                  ? `current model ${current}; next model ${next}`
+                  : next
+                    ? `next model ${next}`
+                    : `model ${current}`,
+            },
+          })
+        },
+        onError: () =>
+          footer.event({ type: "stream.patch", patch: { status: "managed model synchronization disconnected" } }),
+      }),
+    )
+  }
+  void restartManagedModel()
   const rememberLocal = (commit: StreamCommit, after?: LocalReplayAnchor) => {
     state.localRows = [...state.localRows, { commit, after }].slice(-LOCAL_REPLAY_ROW_LIMIT)
   }
@@ -716,6 +768,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         clearTimeout(resizeTimer)
       }
       offResize()
+      await managedSubscription?.then((item) => item.close()).catch(() => {})
       await state.stream?.then((item) => item.handle.close()).catch(() => {})
     }
   } finally {
@@ -748,6 +801,7 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
     replay: input.replay,
     replayLimit: input.replayLimit,
     demo: input.demo,
+    managedFetch: input.fetch,
     resolveSession: () => {
       if (session) {
         return session
