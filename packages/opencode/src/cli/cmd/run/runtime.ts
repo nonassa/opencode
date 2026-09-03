@@ -4,7 +4,7 @@
 // and prompt queue together into a single session loop. Two entry points:
 //
 //   runInteractiveMode     -- used when an SDK client already exists (attach mode)
-//   runInteractiveLocalMode -- used for local in-process mode (no server)
+//   runInteractiveLocalMode -- used for local mode with an in-process SDK
 //
 // Both delegate to runInteractiveRuntime, which:
 //   1. resolves TUI config, model info, and session history,
@@ -56,11 +56,15 @@ type RunRuntimeInput = {
   replayLimit?: number
   demo?: RunInput["demo"]
   managedFetch?: typeof globalThis.fetch
+  managedModelOrigin?: URL
+  managedModelAuthorization?: string
 }
 
 type RunLocalInput = {
   directory: string
   fetch: typeof globalThis.fetch
+  managedModelOrigin?: URL
+  managedModelAuthorization?: string
   resolveAgent: () => Promise<string | undefined>
   session: (sdk: RunInput["sdk"]) => Promise<{ id: string; title?: string } | undefined>
   share: (sdk: RunInput["sdk"], sessionID: string) => Promise<void>
@@ -382,6 +386,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     managedSubscription = managedTransport?.then((mod) =>
       mod.subscribeManagedModel({
         fetch: input.managedFetch ?? globalThis.fetch,
+        origin: input.managedModelOrigin,
+        authorization: input.managedModelAuthorization,
         directory: ctx.directory,
         sessionID: () => state.sessionID,
         onProjection: (projection) => {
@@ -788,8 +794,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   }
 }
 
-// Local in-process mode. Creates an SDK client backed by a direct fetch to
-// the in-process server, so no external HTTP server is needed.
+// Local mode. Creates an SDK client backed by a direct in-process fetch. The
+// managed model stream may use the protected loopback listener so it observes
+// the same service graph as managed control requests.
 export async function runInteractiveLocalMode(input: RunLocalInput): Promise<void> {
   const sdk = createOpencodeClient({
     baseUrl: "http://opencode.internal",
@@ -807,6 +814,8 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
     replayLimit: input.replayLimit,
     demo: input.demo,
     managedFetch: input.fetch,
+    managedModelOrigin: input.managedModelOrigin,
+    managedModelAuthorization: input.managedModelAuthorization,
     resolveSession: () => {
       if (session) {
         return session

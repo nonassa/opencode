@@ -6,7 +6,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 //   1. Non-interactive (default): sends a single prompt, streams events to
 //      stdout, and exits when the session goes idle.
 //   2. Interactive local (`opencode --mini`): boots the split-footer direct mode
-//      with an in-process server (no external HTTP).
+//      with an in-process SDK and the protected loopback control listener.
 //   3. Interactive attach (`opencode --mini --attach`): connects to a running
 //      opencode server and runs interactive mode against it.
 //
@@ -907,8 +907,16 @@ export const RunCommand = effectCmd({
       if (interactive && !args.attach && !args.session && !args.continue) {
         const model = pick(args.model)
         const { runInteractiveLocalMode } = await import("./run/runtime")
+        const { Server } = await import("@/server/server")
+        const managedModelOrigin = Server.url
+        if (
+          process.env.OPENCODE_CONFIG_CONTENT_ONLY === "1" &&
+          process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL === "1" &&
+          !managedModelOrigin
+        ) {
+          throw new Error("Managed OpenCode model synchronization requires the protected loopback server.")
+        }
         const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
-          const { Server } = await import("@/server/server")
           const request = new Request(input, init)
           const headers = new Headers(request.headers)
           const auth = ServerAuth.header()
@@ -920,6 +928,8 @@ export const RunCommand = effectCmd({
           return await runInteractiveLocalMode({
             directory: directory ?? root,
             fetch: fetchFn,
+            managedModelOrigin,
+            managedModelAuthorization: ServerAuth.header(),
             resolveAgent: localAgent,
             session,
             share,

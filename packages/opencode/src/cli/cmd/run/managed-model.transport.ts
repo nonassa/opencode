@@ -10,17 +10,22 @@ export type ManagedModelSubscription = Readonly<{ close: () => Promise<void> }>
 
 export async function subscribeManagedModel(input: {
   fetch: typeof globalThis.fetch
+  origin?: URL
+  authorization?: string
   directory: string
   sessionID: () => string
   onProjection: (projection: ManagedModelProjection) => void
   onError?: (error: unknown) => void
 }): Promise<ManagedModelSubscription> {
   const controller = new AbortController()
-  const headers = { "x-opencode-directory": input.directory }
+  const headers = {
+    "x-opencode-directory": input.directory,
+    ...(input.authorization ? { authorization: input.authorization } : {}),
+  }
   const run = async () => {
     while (!controller.signal.aborted) {
       try {
-        const url = new URL("http://opencode.internal/managed/model/events")
+        const url = new URL("/managed/model/events", input.origin ?? "http://opencode.internal")
         const sessionID = input.sessionID()
         if (sessionID) url.searchParams.set("sessionID", sessionID)
         const response = await input.fetch(url, { headers, signal: controller.signal })

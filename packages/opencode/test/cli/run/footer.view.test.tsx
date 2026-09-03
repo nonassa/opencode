@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { BoxRenderable, RGBA, type RootRenderable } from "@opentui/core"
+import { createTestRenderer } from "@opentui/core/testing"
 import { testRender, useRenderer } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
@@ -314,10 +315,12 @@ test("direct footer composer area does not adopt footer surface", async () => {
 })
 
 test("managed model event replaces the rendered footer model", async () => {
-  const app = await testRender(() => <box width={100} height={8} />, {
-    width: 100,
+  const app = await createTestRenderer({
+    width: 160,
     height: 8,
     kittyKeyboard: true,
+    screenMode: "split-footer",
+    footerHeight: 4,
   })
   const keymap = createDefaultOpenTuiKeymap(app.renderer)
   const footer = new RunFooter(app.renderer, {
@@ -343,21 +346,18 @@ test("managed model event replaces the rendered footer model", async () => {
   })
 
   try {
+    await footer.idle()
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("deepseek/deepseek-v4-flash")
+
     footer.event({
       type: "model",
       model: "google/gemini-3.7-flash · OPENROUTER",
       current: { providerID: "OPENROUTER", modelID: "google/gemini-3.7-flash" },
     })
-    const projection = footer as unknown as {
-      currentModel: () => RunInput["model"]
-      state: () => FooterState
-    }
-
-    expect(projection.currentModel()).toEqual({
-      providerID: "OPENROUTER",
-      modelID: "google/gemini-3.7-flash",
-    })
-    expect(projection.state().model).toBe("google/gemini-3.7-flash · OPENROUTER")
+    const frame = await app.waitForFrame((value) => value.includes("google/gemini-3.7-flash"))
+    expect(frame).toContain("google/gemini-3.7-flash")
+    expect(frame).not.toContain("deepseek/deepseek-v4-flash")
   } finally {
     footer.destroy()
     app.renderer.destroy()
