@@ -393,7 +393,11 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           state.activeVariant = undefined
           state.variants = variantsFor(state.providers, selected)
           footer.event({ type: "variants", variants: state.variants, current: state.activeVariant })
-          footer.event({ type: "model", model: formatModelLabel(selected, state.activeVariant, state.providers) })
+          footer.event({
+            type: "model",
+            model: formatModelLabel(selected, state.activeVariant, state.providers),
+            current: selected,
+          })
           const current = projection.current
             ? `${projection.current.providerID}/${projection.current.modelID}`
             : undefined
@@ -502,6 +506,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     footer.event({
       type: "model",
       model: formatModelLabel(state.model, state.activeVariant, state.providers),
+      current: state.model,
     })
   })
 

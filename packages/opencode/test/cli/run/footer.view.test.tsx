@@ -17,6 +17,7 @@ import {
   RunVariantSelectBody,
 } from "@/cli/cmd/run/footer.command"
 import { RunFooterView } from "@/cli/cmd/run/footer.view"
+import { RunFooter } from "@/cli/cmd/run/footer"
 import { RunEntryContent } from "@/cli/cmd/run/scrollback.writer"
 import { RUN_THEME_FALLBACK, type RunTheme } from "@/cli/cmd/run/theme"
 import type {
@@ -309,6 +310,57 @@ test("direct footer composer area does not adopt footer surface", async () => {
     expect(area.backgroundColor.toInts()).not.toEqual(surface.toInts())
   } finally {
     app.cleanup()
+  }
+})
+
+test("managed model event replaces the rendered footer model", async () => {
+  const app = await testRender(() => <box width={100} height={8} />, {
+    width: 100,
+    height: 8,
+    kittyKeyboard: true,
+  })
+  const keymap = createDefaultOpenTuiKeymap(app.renderer)
+  const footer = new RunFooter(app.renderer, {
+    directory: "/tmp",
+    findFiles: async () => [],
+    agents: [],
+    resources: [],
+    sessionID: () => undefined,
+    agentLabel: "Build",
+    modelLabel: "deepseek/deepseek-v4-flash · StratCraft Integrated Guide",
+    model: { providerID: "stratcraft-integrated", modelID: "deepseek/deepseek-v4-flash" },
+    variant: undefined,
+    first: true,
+    theme: RUN_THEME_FALLBACK,
+    keymap,
+    tuiConfig,
+    backgroundSubagents: false,
+    diffStyle: "auto",
+    onPermissionReply: () => {},
+    onQuestionReply: () => {},
+    onQuestionReject: () => {},
+    onEditorOpen: async () => undefined,
+  })
+
+  try {
+    footer.event({
+      type: "model",
+      model: "google/gemini-3.7-flash · OPENROUTER",
+      current: { providerID: "OPENROUTER", modelID: "google/gemini-3.7-flash" },
+    })
+    const projection = footer as unknown as {
+      currentModel: () => RunInput["model"]
+      state: () => FooterState
+    }
+
+    expect(projection.currentModel()).toEqual({
+      providerID: "OPENROUTER",
+      modelID: "google/gemini-3.7-flash",
+    })
+    expect(projection.state().model).toBe("google/gemini-3.7-flash · OPENROUTER")
+  } finally {
+    footer.destroy()
+    app.renderer.destroy()
   }
 })
 

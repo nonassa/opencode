@@ -251,6 +251,7 @@ export type FooterEvent =
   | {
       type: "model"
       model: string
+      current: RunInput["model"]
     }
   | {
       type: "turn.send"

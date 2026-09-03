@@ -218,7 +218,11 @@ describe("run interactive runtime", () => {
       else process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL = previousControl
     })
 
-    expect(events).toContainEqual({ type: "model", model: "Little Frank · OpenAI" })
+    expect(events).toContainEqual({
+      type: "model",
+      model: "Little Frank · OpenAI",
+      current: { providerID: "openai", modelID: "gpt-5" },
+    })
     expect(events).toContainEqual({
       type: "stream.patch",
       patch: { status: "next model openrouter/google/gemini-3.7-flash" },

@@ -427,6 +427,14 @@ export class RunFooter implements FooterApi {
       return
     }
 
+    if (next.type === "model") {
+      if (this.isGone) {
+        return
+      }
+
+      this.setCurrentModel(next.current)
+    }
+
     if (next.type === "variants") {
       if (this.isGone) {
         return
