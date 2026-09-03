@@ -139,6 +139,7 @@ afterEach(() => {
 describe("run interactive runtime", () => {
   test("renders the latest managed model projection before the first session", async () => {
     const events: unknown[] = []
+    let managedRenderFlushes = 0
     const previousContentOnly = process.env.OPENCODE_CONFIG_CONTENT_ONLY
     const previousControl = process.env.STRATCRAFT_MANAGED_OPENCODE_CONTROL
     process.env.OPENCODE_CONFIG_CONTENT_ONLY = "1"
@@ -166,6 +167,9 @@ describe("run interactive runtime", () => {
         createRuntimeLifecycle: async () => {
           const output = footer()
           output.event = (event) => events.push(event)
+          output.idle = async () => {
+            managedRenderFlushes++
+          }
           return {
             footer: output,
             onResize: () => () => {},
@@ -231,6 +235,7 @@ describe("run interactive runtime", () => {
       type: "stream.patch",
       patch: { status: "current model openrouter/deepseek/deepseek-v4-flash; next model openai/gpt-5" },
     })
+    expect(managedRenderFlushes).toBe(3)
     expect(JSON.stringify(events)).not.toContain("stale/model")
   })
 

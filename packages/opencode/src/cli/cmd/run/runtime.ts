@@ -419,6 +419,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
                     : `model ${current}`,
             },
           })
+          void footer.idle().catch(() =>
+            footer.event({ type: "stream.patch", patch: { status: "managed model repaint failed" } }),
+          )
         },
         onError: () =>
           footer.event({ type: "stream.patch", patch: { status: "managed model synchronization disconnected" } }),
