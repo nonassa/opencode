@@ -31,20 +31,23 @@ const base = {
   ],
   questions: [
     {
-      questionId: "starting-direction",
-      header: "Strategy intent",
-      question: "What should this strategy be about?",
+      questionId: "authoring-path",
+      header: "How to continue",
+      question: "How would you like to continue?",
       selectionMode: "single",
       customAnswerPolicy: "allowed",
-      options: [{ optionId: "trend", label: "Trend", description: "Use a public trend pattern." }],
+      options: [
+        { optionId: "browse-public-algorithms", label: "Browse public algorithms", description: "Browse next." },
+        { optionId: "recommend-starting-point", label: "Recommend a starting point", description: "Recommend one." },
+      ],
     },
     {
-      questionId: "choice-ownership",
-      header: "Choice ownership",
-      question: "Who should choose?",
+      questionId: "public-algorithm-library",
+      header: "Public algorithm library",
+      question: "Which public algorithm library would you like to browse?",
       selectionMode: "single",
       customAnswerPolicy: "allowed",
-      options: [{ optionId: "user", label: "I will", description: "The user will choose." }],
+      options: [{ optionId: "freqtrade", label: "freqtrade", description: "Browse public strategies." }],
     },
   ],
   effects: { createsStrategyRules: false, allowsExecutableAction: false },
@@ -77,13 +80,16 @@ describe("Strategy Authoring catalog question adapter", () => {
   test("loads exact orientation before catalog questions", async () => {
     await using tmp = await tmpdir()
     await writeProjection(tmp.path, base)
-    expect(loadStrategyAuthoringInteraction(tmp.path, ["starting-direction"])).toEqual({
+    expect(loadStrategyAuthoringInteraction(tmp.path, ["authoring-path"])).toEqual({
       orientation: base.sections,
       questions: [
         {
-          question: "What should this strategy be about?",
-          header: "Strategy intent",
-          options: [{ label: "Trend", description: "Use a public trend pattern." }],
+          question: "How would you like to continue?",
+          header: "How to continue",
+          options: [
+            { label: "Browse public algorithms", description: "Browse next." },
+            { label: "Recommend a starting point", description: "Recommend one." },
+          ],
           multiple: false,
           custom: true,
         },
@@ -94,18 +100,21 @@ describe("Strategy Authoring catalog question adapter", () => {
   test("loads exact questions in catalog order", async () => {
     await using tmp = await tmpdir()
     await writeProjection(tmp.path, base)
-    expect(loadStrategyAuthoringQuestions(tmp.path, ["starting-direction", "choice-ownership"])).toEqual([
+    expect(loadStrategyAuthoringQuestions(tmp.path, ["authoring-path", "public-algorithm-library"])).toEqual([
       {
-        question: "What should this strategy be about?",
-        header: "Strategy intent",
-        options: [{ label: "Trend", description: "Use a public trend pattern." }],
+        question: "How would you like to continue?",
+        header: "How to continue",
+        options: [
+          { label: "Browse public algorithms", description: "Browse next." },
+          { label: "Recommend a starting point", description: "Recommend one." },
+        ],
         multiple: false,
         custom: true,
       },
       {
-        question: "Who should choose?",
-        header: "Choice ownership",
-        options: [{ label: "I will", description: "The user will choose." }],
+        question: "Which public algorithm library would you like to browse?",
+        header: "Public algorithm library",
+        options: [{ label: "freqtrade", description: "Browse public strategies." }],
         multiple: false,
         custom: true,
       },
@@ -114,18 +123,18 @@ describe("Strategy Authoring catalog question adapter", () => {
 
   test("rejects missing, malformed, and hash-mismatched projections", async () => {
     await using tmp = await tmpdir()
-    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["starting-direction"])).toThrow("Cannot load verified")
+    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow("Cannot load verified")
     await Bun.write(path.join(tmp.path, "instructions", "strategy-authoring-orientation.json"), "not-json")
-    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["starting-direction"])).toThrow("Cannot load verified")
+    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow("Cannot load verified")
     await writeProjection(tmp.path, { ...base, locale: "fr_FR" }, base)
-    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["starting-direction"])).toThrow("projection hash mismatch")
+    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow("projection hash mismatch")
   })
 
   test("rejects invalid catalog structure and semantics", async () => {
     await using tmp = await tmpdir()
     await mkdir(path.join(tmp.path, "instructions"), { recursive: true })
     await Bun.write(path.join(tmp.path, "instructions", "strategy-authoring-orientation.json"), "null")
-    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["starting-direction"])).toThrow("must be an object")
+    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow("must be an object")
     const invalid = [
       { ...base, sections: null },
       { ...base, sections: [null] },
@@ -153,7 +162,7 @@ describe("Strategy Authoring catalog question adapter", () => {
     ]
     for (const projection of invalid) {
       await writeProjection(tmp.path, projection)
-      expect(() => loadStrategyAuthoringQuestions(tmp.path, ["starting-direction"])).toThrow()
+      expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow()
     }
   })
 
@@ -161,11 +170,11 @@ describe("Strategy Authoring catalog question adapter", () => {
     await using tmp = await tmpdir()
     await writeProjection(tmp.path, base)
     expect(() => loadStrategyAuthoringQuestions(tmp.path, [])).toThrow("non-empty and unique")
-    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["starting-direction", "starting-direction"])).toThrow(
+    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path", "authoring-path"])).toThrow(
       "non-empty and unique",
     )
     expect(() => loadStrategyAuthoringQuestions(tmp.path, ["unknown"])).toThrow("Unknown Strategy Authoring")
-    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["choice-ownership", "starting-direction"])).toThrow(
+    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["public-algorithm-library", "authoring-path"])).toThrow(
       "retain catalog order",
     )
   })
