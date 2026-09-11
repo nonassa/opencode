@@ -463,6 +463,32 @@ function mapProviderOptions(
   })
 }
 
+function projectGeminiToolSignatures(msgs: ModelMessage[], model: Provider.Model) {
+  if (model.api.npm !== "@ai-sdk/openai-compatible" || !model.api.id.toLowerCase().includes("gemini")) return msgs
+
+  return msgs.map((msg) => {
+    if (!Array.isArray(msg.content)) return msg
+    return {
+      ...msg,
+      content: msg.content.map((part) => {
+        if (part.type !== "tool-call") return part
+        const thoughtSignature = part.providerOptions?.[model.providerID]?.thoughtSignature
+        if (typeof thoughtSignature !== "string" || thoughtSignature.length === 0) return part
+        return {
+          ...part,
+          providerOptions: {
+            ...part.providerOptions,
+            google: {
+              ...part.providerOptions?.google,
+              thoughtSignature,
+            },
+          },
+        }
+      }),
+    } as typeof msg
+  })
+}
+
 export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
@@ -498,6 +524,8 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
 
     msgs = mapProviderOptions(msgs, remap)
   }
+
+  msgs = projectGeminiToolSignatures(msgs, model)
 
   // Strip Responses item IDs before serialization, following Codex and keeping signed request bodies immutable.
   if (
