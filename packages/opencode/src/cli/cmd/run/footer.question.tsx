@@ -334,7 +334,9 @@ export function RunQuestionBody(props: {
                   </box>
                   <For each={props.request.questions}>
                     {(item, index) => {
-                      const value = () => state().answers[index()]?.join(", ") ?? ""
+                      const value = () => state().answers[index()]?.map((answer) => (
+                        item.options.find((option) => (option.optionId ?? option.label) === answer)?.label ?? answer
+                      )).join(", ") ?? ""
                       const answered = () => Boolean(value())
                       return (
                         <box paddingLeft={1}>
@@ -398,7 +400,7 @@ export function RunQuestionBody(props: {
                   <For each={info()?.options ?? []}>
                     {(item, index) => {
                       const active = () => state().selected === index()
-                      const hit = () => state().answers[state().tab]?.includes(item.label) ?? false
+                      const hit = () => state().answers[state().tab]?.includes(item.optionId ?? item.label) ?? false
                       return (
                         <box
                           flexDirection="column"

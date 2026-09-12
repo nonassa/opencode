@@ -705,6 +705,7 @@ export type QuestionOrientationSection = {
 }
 
 export type QuestionOption = {
+  optionId?: string
   /**
    * Display text (1-5 words, concise)
    */
@@ -724,11 +725,12 @@ export type QuestionInfo = {
    * Very short label (max 30 chars)
    */
   header: string
+  multiple?: boolean
+  questionId?: string
   /**
    * Available choices
    */
   options: Array<QuestionOption>
-  multiple?: boolean
   custom?: boolean
 }
 
@@ -9184,7 +9186,7 @@ export type QuestionListResponse = QuestionListResponses[keyof QuestionListRespo
 export type QuestionReplyData = {
   body?: {
     /**
-     * User answers in order of questions (each answer is an array of selected labels)
+     * User answers in question order as stable option IDs when supplied, otherwise labels or custom text
      */
     answers: Array<QuestionAnswer>
   }

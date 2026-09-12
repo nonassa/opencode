@@ -4,6 +4,17 @@ import path from "node:path"
 
 const relativePath = path.join("instructions", "strategy-authoring-orientation.json")
 
+export function resolveStrategyAuthoringDirectory(directory: string, taskId: string | undefined, instructions: readonly string[]) {
+  if (!taskId || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(taskId) || taskId === "." || taskId === "..") {
+    throw new Error("Strategy Authoring catalog requires the admitted task identity")
+  }
+  const projection = path.join(directory, ".stratcraft", "tasks", taskId)
+  if (!instructions.includes(path.join(projection, "AGENTS.md"))) {
+    throw new Error("Strategy Authoring catalog requires the admitted task instruction projection")
+  }
+  return projection
+}
+
 type CatalogOption = {
   optionId: string
   label: string
@@ -185,9 +196,14 @@ export function loadStrategyAuthoringInteraction(directory: string, questionIds:
   return {
     orientation: projection.sections,
     questions: selected.map((question) => ({
+      questionId: question.questionId,
       question: question.question,
       header: question.header,
-      options: question.options.map((option) => ({ label: option.label, description: option.description })),
+      options: question.options.map((option) => ({
+        optionId: option.optionId,
+        label: option.label,
+        description: option.description,
+      })),
       multiple: false,
       custom: true,
     })),

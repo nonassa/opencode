@@ -248,11 +248,11 @@ export function questionSelect(state: QuestionBodyState, request: QuestionReques
 
   if (info.multiple) {
     return {
-      state: questionToggle(state, option.label),
+      state: questionToggle(state, option.optionId ?? option.label),
     }
   }
 
-  return questionPick(state, request, option.label)
+  return questionPick(state, request, option.optionId ?? option.label)
 }
 
 export function questionSave(state: QuestionBodyState, request: QuestionRequest): QuestionStep {

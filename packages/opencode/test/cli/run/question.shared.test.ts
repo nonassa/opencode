@@ -38,6 +38,34 @@ describe("run question shared", () => {
     })
   })
 
+  test("returns a catalog option identity while retaining its presentation label", () => {
+    const out = questionSelect(
+      createQuestionBodyState("question-1"),
+      req({
+        questions: [
+          {
+            questionId: "authoring-path",
+            question: "How would you like to continue?",
+            header: "How to continue",
+            options: [
+              {
+                optionId: "browse-public-algorithms",
+                label: "Browse public algorithms",
+                description: "Browse next.",
+              },
+            ],
+            multiple: false,
+          },
+        ],
+      }),
+    )
+
+    expect(out.reply).toEqual({
+      requestID: "question-1",
+      answers: [["browse-public-algorithms"]],
+    })
+  })
+
   test("advances multi-question flows and submits from confirm", () => {
     const ask = req({
       questions: [

@@ -12,9 +12,14 @@ export const ID = Schema.String.check(Schema.isStartsWith("que")).pipe(
   statics((schema) => ({ ascending: (id?: string) => schema.make(id ?? "que_" + ascending()) })),
 )
 
-export const Option = Schema.Struct({
+const PromptOption = Schema.Struct({
   label: Schema.String.annotate({ description: "Display text (1-5 words, concise)" }),
   description: Schema.String.annotate({ description: "Explanation of choice" }),
+}).annotate({ identifier: "QuestionPromptOption" })
+
+export const Option = Schema.Struct({
+  optionId: Schema.optional(Schema.String).annotate({ description: "Stable catalog option identity" }),
+  ...PromptOption.fields,
 }).annotate({ identifier: "QuestionOption" })
 
 export const OrientationItem = Schema.Struct({
@@ -32,15 +37,19 @@ export const OrientationSection = Schema.Struct({
 const base = {
   question: Schema.String.annotate({ description: "Complete question" }),
   header: Schema.String.annotate({ description: "Very short label (max 30 chars)" }),
-  options: Schema.Array(Option).annotate({ description: "Available choices" }),
   multiple: Schema.optional(Schema.Boolean).annotate({ description: "Allow selecting multiple choices" }),
 }
 
 export const Info = Schema.Struct({
   ...base,
+  questionId: Schema.optional(Schema.String).annotate({ description: "Stable catalog question identity" }),
+  options: Schema.Array(Option).annotate({ description: "Available choices" }),
   custom: Schema.optional(Schema.Boolean).annotate({ description: "Allow typing a custom answer (default: true)" }),
 }).annotate({ identifier: "QuestionInfo" })
-export const Prompt = Schema.Struct(base).annotate({ identifier: "QuestionPrompt" })
+export const Prompt = Schema.Struct({
+  ...base,
+  options: Schema.Array(PromptOption).annotate({ description: "Available choices" }),
+}).annotate({ identifier: "QuestionPrompt" })
 export const Tool = Schema.Struct({ messageID: SessionV1.MessageID, callID: Schema.String }).annotate({
   identifier: "QuestionTool",
 })
@@ -54,7 +63,7 @@ export const Request = Schema.Struct({
 export const Answer = Schema.Array(Schema.String).annotate({ identifier: "QuestionAnswer" })
 export const Reply = Schema.Struct({
   answers: Schema.Array(Answer).annotate({
-    description: "User answers in order of questions (each answer is an array of selected labels)",
+    description: "User answers in question order as stable option IDs when supplied, otherwise labels or custom text",
   }),
 }).annotate({ identifier: "QuestionReply" })
 export const Replied = Schema.Struct({

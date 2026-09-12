@@ -16,6 +16,10 @@ import { ScopedKey } from "@/utils/server-scope"
 
 const cache = new Map<string, { tab: number; answers: QuestionAnswer[]; custom: string[]; customOn: boolean[] }>()
 
+export function questionOptionAnswer(option: { optionId?: string; label: string }) {
+  return option.optionId ?? option.label
+}
+
 function Mark(props: { multi: boolean; picked: boolean; onClick?: (event: MouseEvent) => void }) {
   return (
     <span data-slot="question-option-check" aria-hidden="true" onClick={props.onClick}>
@@ -157,7 +161,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     if (store.customOn[tab] === true) return list.length
     return Math.max(
       0,
-      list.findIndex((item) => store.answers[tab]?.includes(item.label) ?? false),
+      list.findIndex((item) => store.answers[tab]?.includes(questionOptionAnswer(item)) ?? false),
     )
   }
 
@@ -376,12 +380,13 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
 
     const opt = options()[optIndex]
     if (!opt) return
+    const answer = questionOptionAnswer(opt)
     if (multi()) {
       setStore("editing", false)
-      toggle(opt.label)
+      toggle(answer)
       return
     }
-    pick(opt.label)
+    pick(answer)
   }
 
   const commitCustom = () => {
@@ -549,7 +554,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
             {(opt, i) => (
               <Option
                 multi={multi()}
-                picked={picked(opt.label)}
+                picked={picked(questionOptionAnswer(opt))}
                 label={opt.label}
                 description={opt.description}
                 disabled={sending()}

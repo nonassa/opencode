@@ -118,11 +118,12 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
     }
     const opt = options()[store.selected]
     if (!opt) return
+    const answer = opt.optionId ?? opt.label
     if (multi()) {
-      toggle(opt.label)
+      toggle(answer)
       return
     }
-    pick(opt.label)
+    pick(answer)
   }
 
   onMount(() => {
@@ -364,7 +365,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
               <For each={options()}>
                 {(opt, i) => {
                   const active = () => i() === store.selected
-                  const picked = () => store.answers[store.tab]?.includes(opt.label) ?? false
+                  const picked = () => store.answers[store.tab]?.includes(opt.optionId ?? opt.label) ?? false
                   return (
                     <box
                       onMouseOver={() => moveTo(i())}
@@ -462,7 +463,9 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
           </box>
           <For each={questions()}>
             {(q, index) => {
-              const value = () => store.answers[index()]?.join(", ") ?? ""
+              const value = () => store.answers[index()]?.map((answer) => (
+                q.options.find((option) => (option.optionId ?? option.label) === answer)?.label ?? answer
+              )).join(", ") ?? ""
               const answered = () => Boolean(value())
               return (
                 <box paddingLeft={1}>

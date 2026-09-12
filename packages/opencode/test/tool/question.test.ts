@@ -11,6 +11,7 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { createHash } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { Config } from "@/config/config"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-session"),
@@ -24,7 +25,7 @@ const ctx = {
 }
 
 const it = testEffect(
-  LayerNode.compile(LayerNode.group([Question.node, EventV2Bridge.node, Truncate.node, Agent.node])),
+  LayerNode.compile(LayerNode.group([Question.node, EventV2Bridge.node, Truncate.node, Agent.node, Config.node])),
 )
 
 const pending = Effect.fn("QuestionToolTest.pending")(function* (question: Question.Interface) {
@@ -64,20 +65,40 @@ describe("tool.question", () => {
         ])
         expect(item.questions).toEqual([
           {
+            questionId: "starting-direction",
             question: "What should this strategy be about?",
             header: "Strategy intent",
             options: [
-              { label: "Trend following", description: "Begin with a public trend-following pattern." },
-              { label: "Open-source starting point", description: "Inspect a supported public algorithm." },
+              {
+                optionId: "trend-following",
+                label: "Trend following",
+                description: "Begin with a public trend-following pattern.",
+              },
+              {
+                optionId: "open-source-starting-point",
+                label: "Open-source starting point",
+                description: "Inspect a supported public algorithm.",
+              },
             ],
             multiple: false,
             custom: true,
           },
         ])
-        yield* question.reply({ requestID: item.id, answers: [["A custom direction"]] })
+        yield* question.reply({ requestID: item.id, answers: [["open-source-starting-point"]] })
         const result = yield* Fiber.join(fiber)
-        expect(result.output).toContain('"What should this strategy be about?"="A custom direction"')
+        expect(result.output).toContain(
+          '"starting-direction (What should this strategy be about?)"="open-source-starting-point"',
+        )
         expect(result.metadata.questions).toEqual(item.questions)
+
+        const customFiber = yield* tool.execute({ catalogQuestionIds: ["starting-direction"] }, ctx).pipe(
+          Effect.forkScoped,
+        )
+        const customItem = yield* pending(question)
+        yield* question.reply({ requestID: customItem.id, answers: [["A custom direction"]] })
+        expect((yield* Fiber.join(customFiber)).output).toContain(
+          '"starting-direction (What should this strategy be about?)"="A custom direction"',
+        )
       }),
     {
       init: (directory) =>
@@ -129,8 +150,15 @@ describe("tool.question", () => {
             ...projection,
             projectionHash: createHash("sha256").update(canonical(projection), "utf8").digest("hex"),
           }
-          const instructionDirectory = path.join(directory, "instructions")
+          const taskDirectory = path.join(directory, ".stratcraft", "tasks", "bound-task")
+          const instructionDirectory = path.join(taskDirectory, "instructions")
           await mkdir(instructionDirectory, { recursive: true })
+          await writeFile(path.join(directory, "opencode.json"), JSON.stringify({
+            instructions: [path.join(taskDirectory, "AGENTS.md")],
+            mcp: { stratforge: { type: "remote", url: "http://127.0.0.1:7789/mcp/authoring", headers: {
+              "X-StratCraft-Authoring-Task-Id": "bound-task",
+            } } },
+          }))
           await writeFile(
             path.join(instructionDirectory, "strategy-authoring-orientation.json"),
             `${JSON.stringify(content)}\n`,

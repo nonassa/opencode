@@ -5,7 +5,7 @@ Use this tool when you need to ask the user questions during execution. This all
 4. Offer choices to the user about what direction to take.
 
 Usage notes:
-- In a managed StratCraft Strategy Authoring workspace, use `catalogQuestionIds` for questions defined in `instructions/strategy-authoring-orientation.json`; do not restate or modify their text or options
+- In a managed StratCraft Strategy Authoring workspace, use `catalogQuestionIds` for questions defined in the admitted task's `instructions/strategy-authoring-orientation.json`; the tool resolves that task directory from the launch binding independently of the software workspace working directory. Do not restate or modify the catalog text or options
 - When `custom` is enabled (default), a "Type your own answer" option is added automatically; don't include "Other" or catch-all options
 - Answers are returned as arrays of labels; set `multiple: true` to allow selecting more than one
 - If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label

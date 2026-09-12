@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test"
 import {
   loadStrategyAuthoringInteraction,
   loadStrategyAuthoringQuestions,
+  resolveStrategyAuthoringDirectory,
 } from "../../src/tool/strategy-authoring-catalog"
 import { tmpdir } from "../fixture/fixture"
 
@@ -77,6 +78,20 @@ async function writeProjection(directory: string, projection: unknown, hashSourc
 }
 
 describe("Strategy Authoring catalog question adapter", () => {
+  test("resolves only the bound task projection, never a workspace or sibling catalog", async () => {
+    await using tmp = await tmpdir()
+    const selected = path.join(tmp.path, ".stratcraft", "tasks", "selected")
+    const sibling = path.join(tmp.path, ".stratcraft", "tasks", "sibling")
+    await writeProjection(selected, base)
+    await writeProjection(sibling, { ...base, sections: [] })
+    const instructions = [path.join(selected, "AGENTS.md")]
+    expect(loadStrategyAuthoringInteraction(
+      resolveStrategyAuthoringDirectory(tmp.path, "selected", instructions), ["authoring-path"],
+    ).orientation).toEqual(base.sections)
+    expect(() => resolveStrategyAuthoringDirectory(tmp.path, "sibling", instructions)).toThrow("instruction projection")
+    expect(() => resolveStrategyAuthoringDirectory(tmp.path, undefined, instructions)).toThrow("task identity")
+    expect(() => resolveStrategyAuthoringDirectory(tmp.path, "../selected", instructions)).toThrow("task identity")
+  })
   test("loads exact orientation before catalog questions", async () => {
     await using tmp = await tmpdir()
     await writeProjection(tmp.path, base)
@@ -84,11 +99,12 @@ describe("Strategy Authoring catalog question adapter", () => {
       orientation: base.sections,
       questions: [
         {
+          questionId: "authoring-path",
           question: "How would you like to continue?",
           header: "How to continue",
           options: [
-            { label: "Browse public algorithms", description: "Browse next." },
-            { label: "Recommend a starting point", description: "Recommend one." },
+            { optionId: "browse-public-algorithms", label: "Browse public algorithms", description: "Browse next." },
+            { optionId: "recommend-starting-point", label: "Recommend a starting point", description: "Recommend one." },
           ],
           multiple: false,
           custom: true,
@@ -102,19 +118,21 @@ describe("Strategy Authoring catalog question adapter", () => {
     await writeProjection(tmp.path, base)
     expect(loadStrategyAuthoringQuestions(tmp.path, ["authoring-path", "public-algorithm-library"])).toEqual([
       {
+        questionId: "authoring-path",
         question: "How would you like to continue?",
         header: "How to continue",
         options: [
-          { label: "Browse public algorithms", description: "Browse next." },
-          { label: "Recommend a starting point", description: "Recommend one." },
+          { optionId: "browse-public-algorithms", label: "Browse public algorithms", description: "Browse next." },
+          { optionId: "recommend-starting-point", label: "Recommend a starting point", description: "Recommend one." },
         ],
         multiple: false,
         custom: true,
       },
       {
+        questionId: "public-algorithm-library",
         question: "Which public algorithm library would you like to browse?",
         header: "Public algorithm library",
-        options: [{ label: "freqtrade", description: "Browse public strategies." }],
+        options: [{ optionId: "freqtrade", label: "freqtrade", description: "Browse public strategies." }],
         multiple: false,
         custom: true,
       },
