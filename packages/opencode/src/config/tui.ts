@@ -170,10 +170,15 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
 
   // Every config dir we may read from: global config dir, any `.opencode`
   // folders between cwd and home, and OPENCODE_CONFIG_DIR.
-  const directories = yield* ConfigPaths.directories(ctx.directory)
-  yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
+  const directories = Flag.OPENCODE_CONFIG_CONTENT_ONLY ? [] : yield* ConfigPaths.directories(ctx.directory)
+  if (!Flag.OPENCODE_CONFIG_CONTENT_ONLY) {
+    yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
+  }
 
-  const projectFiles = Flag.OPENCODE_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
+  const projectFiles =
+    Flag.OPENCODE_CONFIG_CONTENT_ONLY || Flag.OPENCODE_DISABLE_PROJECT_CONFIG
+      ? []
+      : yield* ConfigPaths.files("tui", ctx.directory)
 
   const acc: Acc = {
     result: {},
@@ -181,8 +186,10 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   }
 
   // 1. Global tui config (lowest precedence).
-  for (const file of ConfigPaths.fileInDirectory(Global.Path.config, "tui")) {
-    yield* mergeFile(acc, file)
+  if (!Flag.OPENCODE_CONFIG_CONTENT_ONLY) {
+    for (const file of ConfigPaths.fileInDirectory(Global.Path.config, "tui")) {
+      yield* mergeFile(acc, file)
+    }
   }
 
   // 2. Explicit OPENCODE_TUI_CONFIG override, if set.

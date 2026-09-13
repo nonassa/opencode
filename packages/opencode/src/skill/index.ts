@@ -17,6 +17,7 @@ import { Glob } from "@opencode-ai/core/util/glob"
 import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
 import { escapeHtml } from "@/util/html"
+import { Flag } from "@opencode-ai/core/flag/flag"
 
 const CLAUDE_EXTERNAL_DIR = ".claude"
 const AGENTS_EXTERNAL_DIR = ".agents"
@@ -263,7 +264,7 @@ const layer = Layer.effect(
           discovery,
           fsys,
           global,
-          flags.disableExternalSkills,
+          flags.disableExternalSkills || Flag.OPENCODE_CONFIG_CONTENT_ONLY,
           flags.disableClaudeCodeSkills,
           ctx.directory,
           ctx.worktree,
@@ -273,13 +274,15 @@ const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("Skill.state")(function* () {
         const s: State = { skills: {}, dirs: new Set() }
-        // Register the built-in skill BEFORE disk discovery so a user-disk
-        // skill with the same name can override it.
-        s.skills[CUSTOMIZE_OPENCODE_SKILL_NAME] = {
-          name: CUSTOMIZE_OPENCODE_SKILL_NAME,
-          description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
-          location: "<built-in>",
-          content: CUSTOMIZE_OPENCODE_SKILL_BODY,
+        if (!Flag.OPENCODE_CONFIG_CONTENT_ONLY) {
+          // Register the built-in skill BEFORE disk discovery so a user-disk
+          // skill with the same name can override it.
+          s.skills[CUSTOMIZE_OPENCODE_SKILL_NAME] = {
+            name: CUSTOMIZE_OPENCODE_SKILL_NAME,
+            description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
+            location: "<built-in>",
+            content: CUSTOMIZE_OPENCODE_SKILL_BODY,
+          }
         }
         yield* loadSkills(s, yield* InstanceState.get(discovered), events)
         return s

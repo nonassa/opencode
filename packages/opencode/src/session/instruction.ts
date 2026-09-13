@@ -78,6 +78,11 @@ const layer: Layer.Layer<
 
     const relative = Effect.fnUntraced(function* (instruction: string) {
       const ctx = yield* InstanceState.context
+      if (Flag.OPENCODE_CONFIG_CONTENT_ONLY) {
+        return yield* fs
+          .glob(instruction, { cwd: ctx.directory, absolute: true, include: "file" })
+          .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+      }
       if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
         return yield* fs
           .globUp(instruction, ctx.directory, ctx.worktree)
@@ -112,15 +117,17 @@ const layer: Layer.Layer<
       const ctx = yield* InstanceState.context
       const paths = new Set<string>()
 
-      for (const file of globalFiles) {
-        if (yield* fs.existsSafe(file)) {
-          paths.add(path.resolve(file))
-          break
+      if (!Flag.OPENCODE_CONFIG_CONTENT_ONLY) {
+        for (const file of globalFiles) {
+          if (yield* fs.existsSafe(file)) {
+            paths.add(path.resolve(file))
+            break
+          }
         }
       }
 
       // The first project-level match wins so we don't stack AGENTS.md/CLAUDE.md from every ancestor.
-      if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
+      if (!Flag.OPENCODE_CONFIG_CONTENT_ONLY && !Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
         for (const file of instructionFiles) {
           const matches = yield* fs
             .findUp(file, ctx.directory, ctx.worktree)
@@ -181,6 +188,7 @@ const layer: Layer.Layer<
       filepath: string,
       messageID: MessageID,
     ) {
+      if (Flag.OPENCODE_CONFIG_CONTENT_ONLY) return []
       const sys = yield* systemPaths()
       const already = extract(messages)
       const results: { filepath: string; content: string }[] = []

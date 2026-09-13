@@ -63,6 +63,29 @@ const withHome = <A, E, R>(home: string, self: Effect.Effect<A, E, R>) =>
       }),
   )
 
+const withProcessEnvs = <A, E, R>(values: Record<string, string | undefined>, self: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() =>
+      Object.fromEntries(
+        Object.keys(values).map((name) => {
+          const previous = process.env[name]
+          const value = values[name]
+          if (value === undefined) delete process.env[name]
+          else process.env[name] = value
+          return [name, previous]
+        }),
+      ),
+    ),
+    () => self,
+    (previous) =>
+      Effect.sync(() => {
+        for (const [name, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[name]
+          else process.env[name] = value
+        }
+      }),
+  )
+
 describe("skill", () => {
   it.effect("formats verbose locations as XML-safe filesystem paths", () =>
     Effect.sync(() => {
@@ -402,6 +425,74 @@ This skill is loaded from the global home directory.
         }),
       )
     }),
+  )
+
+  it.live("content-only mode exposes only explicitly configured skills", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const explicit = path.join(dir, "managed-skills")
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(explicit, "approved-skill", "SKILL.md"),
+                `---
+name: approved-skill
+description: Approved managed task skill.
+---
+
+# Approved Skill
+`,
+              ),
+              Bun.write(
+                path.join(dir, ".agents", "skills", "project-skill", "SKILL.md"),
+                `---
+name: project-skill
+description: Unrelated project skill.
+---
+
+# Project Skill
+`,
+              ),
+              Bun.write(
+                path.join(dir, ".claude", "skills", "global-skill", "SKILL.md"),
+                `---
+name: global-skill
+description: Unrelated global skill.
+---
+
+# Global Skill
+`,
+              ),
+            ]),
+          )
+
+          yield* withHome(
+            dir,
+            withProcessEnvs(
+              {
+                OPENCODE_CONFIG_CONTENT_ONLY: "1",
+                OPENCODE_CONFIG_CONTENT: JSON.stringify({
+                  $schema: "https://opencode.ai/config.json",
+                  skills: { paths: [explicit] },
+                }),
+              },
+              Effect.gen(function* () {
+                const skill = yield* Skill.Service
+                expect((yield* skill.all()).map((item) => item.name)).toEqual(["approved-skill"])
+                expect((yield* skill.available()).map((item) => item.name)).toEqual(["approved-skill"])
+                expect((yield* skill.require("approved-skill")).location).toBe(
+                  path.join(explicit, "approved-skill", "SKILL.md"),
+                )
+
+                const unrelated = yield* Effect.flip(skill.require("project-skill"))
+                expect(unrelated.available).toEqual(["approved-skill"])
+              }).pipe(provideInstance(dir)),
+            ),
+          )
+        }),
+      { git: true },
+    ),
   )
 
   it.live("discovers skills from both .claude/skills/ and .agents/skills/", () =>

@@ -435,6 +435,54 @@ it.instance("project config takes precedence over OPENCODE_TUI_CONFIG (matches O
   ),
 )
 
+it.instance("content-only mode uses only the explicit TUI configuration", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const explicit = path.join(test.directory, "managed-tui.json")
+      const local = path.join(test.directory, ".opencode")
+      yield* fs.makeDirectory(local, { recursive: true })
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), {
+        theme: "global",
+        plugin: ["global-plugin@1.0.0"],
+      })
+      yield* fs.writeJson(path.join(test.directory, "tui.json"), {
+        theme: "project",
+        plugin: ["project-plugin@1.0.0"],
+      })
+      yield* fs.writeJson(path.join(local, "tui.json"), {
+        theme: "local",
+        plugin: ["local-plugin@1.0.0"],
+      })
+      yield* fs.writeJson(explicit, {
+        theme: "managed",
+        plugin: ["managed-plugin@1.0.0"],
+      })
+
+      yield* withEnv(
+        "OPENCODE_CONFIG_CONTENT_ONLY",
+        "1",
+        withEnv(
+          "OPENCODE_TUI_CONFIG",
+          explicit,
+          Effect.gen(function* () {
+            const config = yield* getTuiConfig(test.directory)
+            const origins = yield* getTuiPluginOrigins(test.directory)
+            expect(config.theme).toBe("managed")
+            expect(config.plugin?.map((item) => ConfigPlugin.pluginSpecifier(item))).toEqual([
+              "managed-plugin@1.0.0",
+            ])
+            expect(origins).toEqual([
+              { spec: "managed-plugin@1.0.0", scope: "local", source: explicit },
+            ])
+          }),
+        ),
+      )
+    }),
+  ),
+)
+
 it.instance("merges keybind overrides across precedence layers", () =>
   withCleanState(
     Effect.gen(function* () {

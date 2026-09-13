@@ -32,17 +32,45 @@ const it = testEffect(
 
 const configLayer = Layer.succeed(Config.Service, TestConfig.make())
 
-const instructionLayer = (global: Partial<Global.Interface>, flags: Partial<RuntimeFlags.Info> = {}) =>
+const instructionLayer = (
+  global: Partial<Global.Interface>,
+  flags: Partial<RuntimeFlags.Info> = {},
+  instructions: string[] = [],
+) =>
   AppNodeBuilder.build(Instruction.node, [
-    [Config.node, configLayer],
+    [
+      Config.node,
+      instructions.length === 0
+        ? configLayer
+        : Layer.succeed(
+            Config.Service,
+            TestConfig.make({ get: () => Effect.succeed({ instructions }) }),
+          ),
+    ],
     [Global.node, Global.layerWith(global)],
     [RuntimeFlags.node, RuntimeFlags.layer(flags)],
   ])
 
 const provideInstruction =
-  (global: Partial<Global.Interface>, flags?: Partial<RuntimeFlags.Info>) =>
+  (global: Partial<Global.Interface>, flags?: Partial<RuntimeFlags.Info>, instructions?: string[]) =>
   <A, E, R>(self: Effect.Effect<A, E, R>) =>
-    self.pipe(Effect.provide(instructionLayer(global, flags)))
+    self.pipe(Effect.provide(instructionLayer(global, flags, instructions)))
+
+const withProcessEnv = <A, E, R>(name: string, value: string | undefined, self: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const previous = process.env[name]
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+      return previous
+    }),
+    () => self,
+    (previous) =>
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env[name]
+        else process.env[name] = previous
+      }),
+  )
 
 const write = (filepath: string, content: string) =>
   Effect.gen(function* () {
@@ -112,6 +140,24 @@ function loaded(filepath: string): SessionV1.WithParts[] {
 }
 
 describe("Instruction.resolve", () => {
+  it.live("content-only mode does not attach nearby instructions when reading a file", () =>
+    withProcessEnv(
+      "OPENCODE_CONFIG_CONTENT_ONLY",
+      "1",
+      withFiles({ "subdir/AGENTS.md": "# Nearby Instructions", "subdir/nested/file.ts": "const x = 1" }, (dir) =>
+        Effect.gen(function* () {
+          const svc = yield* Instruction.Service
+          const results = yield* svc.resolve(
+            [],
+            path.join(dir, "subdir", "nested", "file.ts"),
+            MessageID.make("msg_message-content-only-1"),
+          )
+          expect(results).toEqual([])
+        }),
+      ),
+    ),
+  )
+
   it.live("returns empty when AGENTS.md is at project root (already in systemPaths)", () =>
     withFiles({ "AGENTS.md": "# Root Instructions", "src/file.ts": "const x = 1" }, (dir) =>
       Effect.gen(function* () {
@@ -210,6 +256,32 @@ describe("Instruction.resolve", () => {
 })
 
 describe("Instruction.system", () => {
+  it.live("content-only mode loads only explicitly configured instructions", () =>
+    Effect.gen(function* () {
+      const globalTmp = yield* tmpWithFiles({ "AGENTS.md": "# Global Instructions" })
+      const projectTmp = yield* tmpWithFiles({
+        "AGENTS.md": "# Project Instructions",
+        "managed/task.md": "# Approved Task Instructions",
+      })
+      const explicit = path.join(projectTmp, "managed", "task.md")
+
+      yield* withProcessEnv(
+        "OPENCODE_CONFIG_CONTENT_ONLY",
+        "1",
+        Effect.gen(function* () {
+          const svc = yield* Instruction.Service
+          expect(Array.from(yield* svc.systemPaths())).toEqual([explicit])
+          expect(yield* svc.system()).toEqual([
+            `Instructions from: ${explicit}\n# Approved Task Instructions`,
+          ])
+        }).pipe(
+          provideInstance(projectTmp),
+          provideInstruction({ home: globalTmp, config: globalTmp }, {}, [explicit]),
+        ),
+      )
+    }),
+  )
+
   it.live("loads both project and global AGENTS.md when both exist", () =>
     Effect.gen(function* () {
       const globalTmp = yield* tmpWithFiles({ "AGENTS.md": "# Global Instructions" })
