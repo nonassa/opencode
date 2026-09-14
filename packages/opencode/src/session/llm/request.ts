@@ -71,7 +71,11 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     { sessionID: input.sessionID, model: input.model },
     { system },
   )
-  if (system.length > 2 && system[0] === header) {
+  if (isGeminiOpenAICompatible(input.model) && system.length > 1) {
+    const combined = system.join("\n")
+    system.length = 0
+    system.push(combined)
+  } else if (system.length > 2 && system[0] === header) {
     const rest = system.slice(1)
     system.length = 0
     system.push(header, rest.join("\n"))
@@ -204,6 +208,12 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     },
   }
 })
+
+function isGeminiOpenAICompatible(model: Provider.Model) {
+  if (model.api.npm !== "@ai-sdk/openai-compatible") return false
+  if (!URL.canParse(model.api.url)) return false
+  return new URL(model.api.url).hostname === "generativelanguage.googleapis.com"
+}
 
 function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission" | "user">) {
   const disabled = Permission.disabled(

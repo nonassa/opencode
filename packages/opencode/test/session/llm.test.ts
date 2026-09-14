@@ -28,6 +28,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 import { ProviderError } from "@/provider/error"
+import { Plugin } from "@/plugin"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -78,11 +79,13 @@ function llmLayerWithExecutor(
   options: {
     executor?: Layer.Layer<RequestExecutor.Service>
     flags?: Partial<RuntimeFlags.Info>
+    plugin?: Layer.Layer<Plugin.Service>
   } = {},
 ) {
   return AppNodeBuilder.build(LLM.node, [
     [RuntimeFlags.node, RuntimeFlags.layer(options.flags)],
     ...(options.executor ? ([[LayerNodePlatform.requestExecutor, options.executor]] as const) : []),
+    ...(options.plugin ? ([[Plugin.node, options.plugin]] as const) : []),
   ])
 }
 
@@ -1152,6 +1155,169 @@ describe("session.llm.stream", () => {
   )
 
   const alibabaQwenFixture = { providerID: "alibaba", modelID: "qwen-plus" }
+  const geminiCompatibleFixture = { providerID: "gemini-compatible-test", modelID: "qwen-plus" }
+  it.instance(
+    "coalesces system fragments after plugin transforms before compatible-provider serialization",
+    () =>
+      Effect.gen(function* () {
+        const fixture = loadFixture(alibabaQwenFixture.providerID, geminiCompatibleFixture.modelID)
+        const request = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("Hello"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        const resolved = yield* Provider.use.getModel(
+          ProviderV2.ID.make(geminiCompatibleFixture.providerID),
+          ModelV2.ID.make(fixture.model.id),
+        )
+        const sessionID = SessionID.make("session-system-fragment-coalescing")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const user = {
+          id: MessageID.make("msg_user-system-fragment-coalescing"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderV2.ID.make(geminiCompatibleFixture.providerID), modelID: resolved.id },
+        } satisfies SessionV1.User
+        const plugin = Layer.succeed(Plugin.Service, {
+          trigger: (name, input, output) =>
+            Effect.sync(() => {
+              if (name === "experimental.chat.system.transform") {
+                ;(output as { system: string[] }).system.push("authoritative orientation")
+                if ((input as { sessionID?: string }).sessionID?.endsWith("-many")) {
+                  ;(output as { system: string[] }).system.push("final policy fragment")
+                }
+              }
+              return output
+            }),
+          list: () => Effect.succeed([]),
+          init: () => Effect.void,
+        } as Plugin.Interface)
+
+        yield* drainWith(llmLayerWithExecutor({ plugin }), {
+          user,
+          sessionID,
+          model: resolved,
+          agent,
+          system: ["task skill instructions"],
+          messages: [{ role: "user", content: "How do I begin?" }],
+          tools: {
+            question: tool({
+              description: "Ask the admitted question",
+              inputSchema: z.object({ catalogQuestionIds: z.array(z.string()) }),
+              execute: async () => ({ output: "" }),
+            }),
+          },
+        })
+
+        const capture = yield* Effect.promise(() => request)
+        const messages = capture.body.messages as Array<{ role?: string; content?: string }>
+        expect(messages.filter((message) => message.role === "system")).toEqual([
+          { role: "system", content: expect.stringContaining("task skill instructions\nauthoritative orientation") },
+        ])
+        expect(messages.filter((message) => message.role === "user")).toEqual([
+          { role: "user", content: "How do I begin?" },
+        ])
+        expect(capture.body.tools).toEqual(
+          expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: "question" }) })]),
+        )
+
+        const manyRequest = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("Hello"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        yield* drainWith(llmLayerWithExecutor({ plugin }), {
+          user: {
+            ...user,
+            id: MessageID.make("msg_user-system-fragment-coalescing-many"),
+            sessionID: SessionID.make("session-system-fragment-coalescing-many"),
+          },
+          sessionID: SessionID.make("session-system-fragment-coalescing-many"),
+          model: resolved,
+          agent,
+          system: ["task skill instructions"],
+          messages: [{ role: "user", content: "How do I begin?" }],
+          tools: {},
+        })
+        const manyCapture = yield* Effect.promise(() => manyRequest)
+        expect(
+          (manyCapture.body.messages as Array<{ role?: string; content?: string }>).filter(
+            (message) => message.role === "system",
+          ),
+        ).toEqual([
+          {
+            role: "system",
+            content: expect.stringContaining(
+              "task skill instructions\nauthoritative orientation\nfinal policy fragment",
+            ),
+          },
+        ])
+
+        const otherResolved = yield* Provider.use.getModel(
+          ProviderV2.ID.make(alibabaQwenFixture.providerID),
+          ModelV2.ID.make(fixture.model.id),
+        )
+        const otherRequest = waitRequest(
+          "/chat/completions",
+          new Response(createChatStream("Hello"), {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        )
+        yield* drainWith(llmLayerWithExecutor({ plugin }), {
+          user: {
+            ...user,
+            id: MessageID.make("msg_user-system-fragment-other-provider"),
+            sessionID: SessionID.make("session-system-fragment-other-provider"),
+            model: { providerID: ProviderV2.ID.make(alibabaQwenFixture.providerID), modelID: otherResolved.id },
+          },
+          sessionID: SessionID.make("session-system-fragment-other-provider"),
+          model: otherResolved,
+          agent,
+          system: ["task skill instructions"],
+          messages: [{ role: "user", content: "How do I begin?" }],
+          tools: {},
+        })
+        expect(
+          ((yield* Effect.promise(() => otherRequest)).body.messages as Array<{ role?: string }>).filter(
+            (message) => message.role === "system",
+          ),
+        ).toHaveLength(2)
+      }),
+    {
+      config: () => ({
+        enabled_providers: [geminiCompatibleFixture.providerID, alibabaQwenFixture.providerID],
+        provider: {
+          [geminiCompatibleFixture.providerID]: {
+            name: "Gemini Compatible Test",
+            npm: "@ai-sdk/openai-compatible",
+            api: "https://generativelanguage.googleapis.com/v1beta/openai",
+            models: {
+              [geminiCompatibleFixture.modelID]: configModel(
+                loadFixture(alibabaQwenFixture.providerID, geminiCompatibleFixture.modelID).model,
+              ) as ConfigModel,
+            },
+            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+          },
+          [alibabaQwenFixture.providerID]: {
+            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+          },
+        },
+      }),
+    },
+  )
+
   it.instance(
     "service stream cancellation cancels provider response body promptly",
     () =>
