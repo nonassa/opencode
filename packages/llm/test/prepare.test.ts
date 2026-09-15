@@ -71,13 +71,14 @@ describe("request option precedence", () => {
       expect(prepared.body).toMatchObject({
         model: "gpt-4o-mini",
         stream: true,
-        max_tokens: 30,
+        max_completion_tokens: 30,
         temperature: 0.5,
         top_p: 0.9,
         frequency_penalty: 0.25,
         store: true,
         reasoning_effort: "medium",
       })
+      expect(prepared.body).not.toHaveProperty("max_tokens")
       expect(prepared.body.stop).toEqual(["request"])
     }),
   )

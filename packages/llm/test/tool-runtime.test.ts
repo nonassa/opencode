@@ -101,7 +101,8 @@ describe("LLMClient tools", () => {
       const messages = Reflect.get(second, "messages")
       const tools = Reflect.get(second, "tools")
 
-      expect(Reflect.get(second, "max_tokens")).toBe(50)
+      expect(Reflect.get(second, "max_completion_tokens")).toBe(50)
+      expect(Reflect.has(second, "max_tokens")).toBe(false)
       expect(Reflect.get(second, "tool_choice")).toBe("auto")
       expect(tools).toHaveLength(1)
       expect(

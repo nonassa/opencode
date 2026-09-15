@@ -98,6 +98,7 @@ export const bodyFields = {
   store: Schema.optional(Schema.Boolean),
   reasoning_effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
   max_tokens: Schema.optional(Schema.Number),
+  max_completion_tokens: Schema.optional(Schema.Number),
   temperature: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
   frequency_penalty: Schema.optional(Schema.Number),
@@ -358,7 +359,9 @@ const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMR
     tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
     stream: true as const,
     stream_options: { include_usage: true },
-    max_tokens: generation?.maxTokens,
+    ...(request.model.route.id === ADAPTER
+      ? { max_completion_tokens: generation?.maxTokens }
+      : { max_tokens: generation?.maxTokens }),
     temperature: generation?.temperature,
     top_p: generation?.topP,
     frequency_penalty: generation?.frequencyPenalty,

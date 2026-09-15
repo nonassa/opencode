@@ -45,7 +45,7 @@ describe("OpenAI Chat route", () => {
         ],
         stream: true,
         stream_options: { include_usage: true },
-        max_tokens: 20,
+        max_completion_tokens: 20,
         temperature: 0,
       })
     }),
