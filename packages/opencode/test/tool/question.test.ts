@@ -106,6 +106,8 @@ describe("tool.question", () => {
           const projection = {
             catalogVersion: "1.0.0",
             locale: "en_US",
+            targetRuntime: "python-backtrader-v1",
+            algorithmBrowsingEmptyState: null,
             sections: [
               {
                 sectionId: "strategy-styles",
