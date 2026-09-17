@@ -43,6 +43,8 @@ type CatalogOrientationSection = {
 type Projection = {
   catalogVersion: string
   locale: string
+  targetRuntime: "python-backtrader-v1" | "cpp23-abi-v2"
+  algorithmBrowsingEmptyState: string | null
   sections: CatalogOrientationSection[]
   questions: CatalogQuestion[]
   effects: {
@@ -157,9 +159,18 @@ function parseProjection(value: unknown): Projection {
   ) {
     throw new Error("Strategy Authoring orientation effects are invalid")
   }
+  const targetRuntime = source.targetRuntime
+  if (targetRuntime !== "python-backtrader-v1" && targetRuntime !== "cpp23-abi-v2") {
+    throw new Error("targetRuntime must be a supported Strategy Authoring runtime")
+  }
+  const algorithmBrowsingEmptyState = source.algorithmBrowsingEmptyState === null
+    ? null
+    : text(source.algorithmBrowsingEmptyState, "algorithmBrowsingEmptyState")
   const projection = {
     catalogVersion: text(source.catalogVersion, "catalogVersion"),
     locale: text(source.locale, "locale"),
+    targetRuntime,
+    algorithmBrowsingEmptyState,
     sections,
     questions,
     effects: {

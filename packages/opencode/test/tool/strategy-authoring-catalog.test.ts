@@ -12,6 +12,8 @@ import { tmpdir } from "../fixture/fixture"
 const base = {
   catalogVersion: "1.0.0",
   locale: "en_US",
+  targetRuntime: "python-backtrader-v1",
+  algorithmBrowsingEmptyState: null,
   sections: [
     {
       sectionId: "strategy-styles",
@@ -113,6 +115,16 @@ describe("Strategy Authoring catalog question adapter", () => {
     })
   })
 
+  test("accepts the complete projection for each supported target runtime", async () => {
+    await using tmp = await tmpdir()
+    await writeProjection(tmp.path, {
+      ...base,
+      targetRuntime: "cpp23-abi-v2",
+      algorithmBrowsingEmptyState: "No convertible algorithms are currently available for this runtime.",
+    })
+    expect(loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toHaveLength(1)
+  })
+
   test("loads exact questions in catalog order", async () => {
     await using tmp = await tmpdir()
     await writeProjection(tmp.path, base)
@@ -146,6 +158,10 @@ describe("Strategy Authoring catalog question adapter", () => {
     expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow("Cannot load verified")
     await writeProjection(tmp.path, { ...base, locale: "fr_FR" }, base)
     expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow("projection hash mismatch")
+    await writeProjection(tmp.path, { ...base, targetRuntime: "cpp23-abi-v2" }, base)
+    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow("projection hash mismatch")
+    await writeProjection(tmp.path, { ...base, algorithmBrowsingEmptyState: "Tampered" }, base)
+    expect(() => loadStrategyAuthoringQuestions(tmp.path, ["authoring-path"])).toThrow("projection hash mismatch")
   })
 
   test("rejects invalid catalog structure and semantics", async () => {
@@ -171,6 +187,8 @@ describe("Strategy Authoring catalog question adapter", () => {
       { ...base, questions: [{ ...base.questions[0], selectionMode: "multiple" }] },
       { ...base, questions: [{ ...base.questions[0], options: [] }] },
       { ...base, questions: [{ ...base.questions[0], options: [null] }] },
+      { ...base, targetRuntime: "unsupported" },
+      { ...base, algorithmBrowsingEmptyState: "" },
       { ...base, questions: [{ ...base.questions[0], options: [{ ...base.questions[0].options[0], optionId: "" }] }] },
       {
         ...base,
