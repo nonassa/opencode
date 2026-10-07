@@ -141,4 +141,10 @@ describe("run permission shared", () => {
       "- src/**/*.tsx",
     ])
   })
+
+  test("shows the complete reviewed algorithm replacement input", () => {
+    const input = { review: { projectId: "project-1", deletion: { files: [{ relativePath: "strategy/strategy.py", sha256: "a".repeat(64) }] }, retiredRequirements: ["grid-levels"] } }
+    expect(permissionInfo(req({ permission: "stratforge_apply_strategy_authoring_algorithm_replacement", metadata: { input, requiresExactReview: true } })).lines)
+      .toEqual(["Tool: stratforge_apply_strategy_authoring_algorithm_replacement", "Confirm only this exact action and its consequences:", JSON.stringify(input, null, 2)])
+  })
 })

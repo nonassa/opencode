@@ -67,17 +67,18 @@ const layer = Layer.effect(
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
-      let needsAsk = false
+      const exactReview = request.metadata.requiresExactReview === true
+      let needsAsk = exactReview
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
+        const rule = evaluate(request.permission, pattern, ruleset, ...(exactReview ? [] : [approved]))
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({
             ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
           })
         }
-        if (rule.action === "allow") continue
+        if (rule.action === "allow" && !exactReview) continue
         needsAsk = true
       }
 
@@ -151,7 +152,7 @@ const layer = Layer.effect(
       }
 
       for (const [id, item] of pending.entries()) {
-        if (item.info.sessionID !== existing.info.sessionID) continue
+        if (item.info.sessionID !== existing.info.sessionID || item.info.metadata.requiresExactReview === true) continue
         const ok = item.info.patterns.every(
           (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
         )

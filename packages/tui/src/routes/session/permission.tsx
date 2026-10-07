@@ -369,6 +369,18 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
+            if (props.request.metadata?.requiresExactReview === true) {
+              return {
+                icon: "⚙",
+                title: `Call tool ${permission}`,
+                body: (
+                  <scrollbox focused flexGrow={1} paddingLeft={1}>
+                    <text fg={theme.text} wrapMode="word">{JSON.stringify(props.request.metadata.input, null, 2)}</text>
+                  </scrollbox>
+                ),
+              }
+            }
+
             return {
               icon: "⚙",
               title: `Call tool ${permission}`,
@@ -402,7 +414,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={Object.fromEntries([
+                ["once", "Allow once"],
+                ...(props.request.metadata?.requiresExactReview === true ? [] : [["always", "Allow always"]]),
+                ["reject", "Reject"],
+              ])}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {

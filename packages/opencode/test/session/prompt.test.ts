@@ -208,7 +208,11 @@ const promptRoot = LayerNode.group([
   RuntimeFlags.node,
 ])
 
-function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makePrompt(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  processor?: "blocking"
+  plugin?: Layer.Layer<Plugin.Service>
+}) {
   const replacements = [
     [SessionSummary.node, summary],
     [LSP.node, lsp],
@@ -218,10 +222,15 @@ function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; proces
   if (input?.processor === "blocking") {
     return LayerNode.compile(promptRoot, [...replacements, [SessionProcessor.node, blockingProcessor]])
   }
+  if (input?.plugin) return LayerNode.compile(promptRoot, [...replacements, [Plugin.node, input.plugin]])
   return LayerNode.compile(promptRoot, replacements)
 }
 
-function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makeHttp(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  processor?: "blocking"
+  plugin?: Layer.Layer<Plugin.Service>
+}) {
   const root = LayerNode.group([promptRoot, testLLMServerNode])
   const replacements = [
     [SessionSummary.node, summary],
@@ -232,16 +241,68 @@ function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processo
   if (input?.processor === "blocking") {
     return LayerNode.compile(root, [...replacements, [SessionProcessor.node, blockingProcessor]])
   }
+  if (input?.plugin) return LayerNode.compile(root, [...replacements, [Plugin.node, input.plugin]])
   return LayerNode.compile(root, replacements)
 }
 
-function makeHttpNoLLMServer(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makeHttpNoLLMServer(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  processor?: "blocking"
+  plugin?: Layer.Layer<Plugin.Service>
+}) {
   return makePrompt(input)
 }
 
 const it = testEffect(makeHttp())
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
+const transformedQuestion = testEffect(
+  makeHttp({
+    plugin: Layer.succeed(Plugin.Service, {
+      trigger: ((name: string, _input: unknown, output: { args?: unknown }) =>
+        Effect.sync(() => {
+          if (name === "tool.execute.before") {
+            output.args = {
+              questions: [
+                {
+                  question: "Canonical question?",
+                  header: "Canonical",
+                  options: [{ label: "Continue", description: "Use the canonical path." }],
+                },
+              ],
+            }
+          }
+          return output
+        })) as Plugin.Interface["trigger"],
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    } as Plugin.Interface),
+  }),
+)
+const requestBoundQuestion = testEffect(
+  makeHttp({
+    plugin: Layer.succeed(Plugin.Service, {
+      trigger: ((
+        name: string,
+        input: { tool?: string; sessionID: SessionID; messageID?: MessageID },
+        output: { output: string },
+      ) => {
+        if (name !== "tool.execute.after" || input.tool !== "question") return Effect.succeed(output)
+        return Effect.gen(function* () {
+          if (!input.messageID) return yield* Effect.die(new Error("The disposition answer has no owning request."))
+          const assistant = yield* MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID })
+          if (assistant.info.role !== "assistant") return yield* Effect.die(new Error("Expected assistant message"))
+          const request = yield* MessageV2.get({ sessionID: input.sessionID, messageID: assistant.info.parentID })
+          expect(request.info.role).toBe("user")
+          output.output += `\nOwning request: ${request.info.id}`
+          return output
+        })
+      }) as Plugin.Interface["trigger"],
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    } as Plugin.Interface),
+  }),
+)
 const withMcpInstructions = testEffect(
   makeHttp({
     mcpInstructions: [
@@ -849,6 +910,108 @@ it.instance("loop continues when finish is tool-calls", () =>
     }
   }),
 )
+
+transformedQuestion.instance("executes arguments replaced by the tool before hook", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const question = yield* Question.Service
+    const session = yield* sessions.create({
+      title: "Transformed question",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "begin" }],
+    })
+    yield* llm.tool("question", {
+      questions: [
+        {
+          question: "Invented question?",
+          header: "Invented",
+          options: [{ label: "Ignore", description: "This must be replaced." }],
+        },
+      ],
+    })
+    yield* llm.text("continued")
+
+    const fiber = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.forkChild)
+    const pending = yield* pollWithTimeout(
+      question.list().pipe(Effect.map((items) => items[0])),
+      "timed out waiting for transformed question",
+    )
+
+    expect(pending.questions).toMatchObject([{ question: "Canonical question?", header: "Canonical" }])
+    const running = (yield* MessageV2.filterCompactedEffect(session.id))
+      .flatMap((message) => message.parts)
+      .find((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "question")
+    expect(running?.state.input).toEqual({
+      questions: [
+        {
+          question: "Canonical question?",
+          header: "Canonical",
+          options: [{ label: "Continue", description: "Use the canonical path." }],
+        },
+      ],
+    })
+    yield* question.reply({ requestID: pending.id, answers: [["Continue"]] })
+    yield* Fiber.join(fiber)
+    const history = JSON.stringify((yield* llm.hits)[1]?.body)
+    expect(history).toContain("Canonical question?")
+    expect(history).not.toContain("Invented question?")
+  }),
+)
+
+for (const answer of ["add-to-current-algorithm", "delete-current-algorithm", "create-new-project"]) {
+  requestBoundQuestion.instance(`returns ${answer} with its owning request after one question`, () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const question = yield* Question.Service
+      const session = yield* sessions.create({
+        title: "Algorithm disposition",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const request = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "Write a moving-average and RSI algorithm" }],
+      })
+      yield* llm.tool("question", {
+        questions: [{
+          question: "How should the current algorithm be handled?",
+          header: "Current algorithm",
+          options: [
+            { label: "add-to-current-algorithm", description: "Integrate with the current algorithm" },
+            { label: "delete-current-algorithm", description: "Write in this project" },
+            { label: "create-new-project", description: "Preserve this project" },
+          ],
+        }],
+      })
+      yield* llm.text("continued")
+      const fiber = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.forkChild)
+      const pending = yield* pollWithTimeout(
+        question.list().pipe(Effect.map((items) => items[0])),
+        "timed out waiting for disposition question",
+      )
+      yield* question.reply({ requestID: pending.id, answers: [[answer]] })
+      yield* Fiber.join(fiber)
+      const parts = (yield* MessageV2.filterCompactedEffect(session.id)).flatMap(message => message.parts)
+      const calls = parts.filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "question")
+      expect(calls).toHaveLength(1)
+      const completed = completedTool(calls)
+      expect(completed?.state.output).toContain(answer)
+      expect(completed?.state.output).toContain(`Owning request: ${request.info.id}`)
+      expect(JSON.stringify((yield* llm.hits)[1]?.body)).toContain(`Owning request: ${request.info.id}`)
+      expect(yield* question.list()).toHaveLength(0)
+    }),
+  )
+}
 
 it.instance("loop continues when finish is unknown", () =>
   Effect.gen(function* () {

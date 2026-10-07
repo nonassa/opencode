@@ -339,7 +339,7 @@ const layer = Layer.effect(
               tool: value.name,
               state:
                 match.state.status === "running"
-                  ? { ...match.state, input }
+                  ? match.state
                   : {
                       status: "running",
                       input,

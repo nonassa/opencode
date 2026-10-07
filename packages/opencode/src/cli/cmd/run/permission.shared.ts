@@ -119,7 +119,9 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
   return {
     icon: "⚙",
     title: `Call tool ${request.permission}`,
-    lines: [`Tool: ${request.permission}`],
+    lines: dict(request.metadata).requiresExactReview === true
+      ? [`Tool: ${request.permission}`, "Confirm only this exact action and its consequences:", JSON.stringify(dict(request.metadata).input, null, 2)]
+      : [`Tool: ${request.permission}`],
   }
 }
 

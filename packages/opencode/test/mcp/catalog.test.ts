@@ -27,6 +27,14 @@ function mcpTool() {
 }
 
 describe("McpCatalog.convertTool", () => {
+  test("1620_13 carries runtime permission evidence outside model arguments", async () => {
+    const calls: unknown[] = []
+    const client = { callTool: async (request: unknown) => { calls.push(request); return { content: [] } } } as unknown as Client
+    const receipt = { stratcraftNativePermission: { nativeSessionId: "ses_1", callId: "call_1", permission: "stratforge_create_strategy_authoring_project" } }
+    const converted = McpCatalog.convertTool(mcpTool(), client, undefined, receipt)
+    await converted.execute?.({ project_name: "RSI" }, options)
+    expect(calls).toEqual([{ name: "screenshot", arguments: { project_name: "RSI" }, _meta: receipt }])
+  })
   test("preserves content when structuredContent is also present", async () => {
     const content = [{ type: "image" as const, mimeType: "image/png", data: "AAAA" }]
     const structuredContent = { image: { mimeType: "image/png", data: "AAAA" } }

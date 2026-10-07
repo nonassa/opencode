@@ -1172,3 +1172,24 @@ it.instance(
     }),
   { git: true },
 )
+
+it.instance(
+  "1620_13 exact action review cannot reuse allow rules or always approval",
+  () => Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const input = { sessionID: SessionID.make("ses_exact_review"), permission: "stratforge_replace",
+      patterns: ["call-1"], metadata: { requiresExactReview: true, input: { files: ["strategy.py"] } },
+      always: [], ruleset: [{ permission: "stratforge_replace", pattern: "*", action: "allow" as const }] }
+    const first = yield* permission.ask(input).pipe(Effect.forkScoped)
+    const pending = yield* waitForPending(1)
+    yield* permission.reply({ requestID: pending[0]!.id, reply: "always" })
+    yield* Fiber.join(first)
+    const second = yield* permission.ask({ ...input, patterns: ["call-2"] }).pipe(Effect.forkScoped)
+    const next = yield* waitForPending(1)
+    expect(next[0]!.patterns).toEqual(["call-2"])
+    yield* permission.reply({ requestID: next[0]!.id, reply: "reject" })
+    const exit = yield* Fiber.await(second)
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+  { git: true },
+)

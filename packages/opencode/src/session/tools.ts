@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Provider } from "@/provider/provider"
@@ -102,13 +103,32 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {
-            const ctx = context(args, options)
+            const hook = { args }
             yield* plugin.trigger(
               "tool.execute.before",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
-              { args },
+              {
+                tool: item.id,
+                sessionID: input.session.id,
+                messageID: input.processor.message.id,
+                callID: options.toolCallId,
+              },
+              hook,
             )
-            const result = yield* item.execute(args, ctx)
+            const executionArgs = hook.args
+            yield* input.processor.updateToolCall(options.toolCallId, (part) => {
+              if (part.state.status !== "running" && part.state.status !== "pending") return part
+              return {
+                ...part,
+                state: {
+                  ...part.state,
+                  status: "running",
+                  input: executionArgs,
+                  time: part.state.status === "running" ? part.state.time : { start: Date.now() },
+                },
+              }
+            })
+            const ctx = context(executionArgs, options)
+            const result = yield* item.execute(executionArgs, ctx)
             const output = {
               ...result,
               attachments: result.attachments?.map((attachment) => ({
@@ -120,7 +140,13 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
             yield* plugin.trigger(
               "tool.execute.after",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+              {
+                tool: item.id,
+                sessionID: ctx.sessionID,
+                messageID: input.processor.message.id,
+                callID: ctx.callID,
+                args: executionArgs,
+              },
               output,
             )
             if (options.abortSignal?.aborted) {
@@ -405,8 +431,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             { args },
           )
           const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
-            yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-            return yield* Effect.promise(() => execute(args, opts))
+            const reviewed = key === "stratforge_create_strategy_authoring_project"
+              || key === "stratforge_apply_strategy_authoring_algorithm_replacement"
+              || key === "stratforge_apply_strategy_authoring_requirement_review"
+            const argumentsHash = createHash("sha256").update(JSON.stringify(args)).digest("hex")
+            yield* ctx.ask({ permission: key, metadata: { input: args, requiresExactReview: reviewed },
+              patterns: [reviewed ? opts.toolCallId : "*"], always: reviewed ? [] : ["*"] })
+            const dispatch = reviewed ? McpCatalog.convertTool(entry.def, entry.client, entry.timeout, {
+              stratcraftNativePermission: { permission: key, nativeSessionId: ctx.sessionID, callId: opts.toolCallId, argumentsHash },
+            }).execute! : execute
+            return yield* Effect.promise(() => dispatch(args, opts))
           }).pipe(
             Effect.withSpan("Tool.execute", {
               attributes: {
