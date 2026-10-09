@@ -1,3 +1,4 @@
+import { chatGptSubscriptionFetch } from "./chatgpt-subscription"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import os from "os"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
@@ -1790,7 +1791,11 @@ const layer = Layer.effect(
         const existing = s.sdk.get(key)
         if (existing) return existing
 
-        const customFetch = options["fetch"]
+        const subscription = options["chatGptSubscription"]
+        delete options["chatGptSubscription"]
+        const customFetch = subscription
+          ? chatGptSubscriptionFetch(subscription, options["fetch"] ?? fetch, envs)
+          : options["fetch"]
         const chunkTimeout = options["chunkTimeout"]
         const headerTimeout = options["headerTimeout"]
         delete options["chunkTimeout"]
