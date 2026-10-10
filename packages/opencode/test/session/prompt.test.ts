@@ -2631,3 +2631,46 @@ noLLMServer.instance(
     }),
   30_000,
 )
+
+for (const failure of ["command.execute.before", "chat.message", undefined]) {
+  const calls: { name: string; messageID: string; status?: string }[] = []
+  const lifecycle = testEffect(
+    makeHttp({
+      plugin: Layer.succeed(Plugin.Service, {
+        trigger: ((name: string, input: { messageID?: string }, output: { status?: string }) =>
+          Effect.gen(function* () {
+            if (name.startsWith("command.execute."))
+              calls.push({ name, messageID: input.messageID!, status: output.status })
+            if (name === failure) return yield* Effect.die(new Error("continuation refused"))
+            return output
+          })) as Plugin.Interface["trigger"],
+        list: () => Effect.succeed([]),
+        init: () => Effect.void,
+      }),
+    }),
+  )
+  lifecycle.instance(
+    `command lifecycle settles after ${failure ?? "success"}`,
+    () =>
+      Effect.gen(function* () {
+        const { llm } = yield* useServerConfig((url) => ({
+          ...providerCfg(url),
+          command: { continue: { template: "Continue" } },
+        }))
+        const { prompt, chat } = yield* boot()
+        yield* llm.text("done")
+        const exit = yield* prompt.command({ sessionID: chat.id, command: "continue", arguments: "" }).pipe(Effect.exit)
+        expect(Exit.isSuccess(exit)).toBe(failure === undefined)
+        expect(calls.map((call) => call.name)).toEqual(["command.execute.before", "command.execute.after"])
+        expect(calls[0].messageID).toBeTruthy()
+        expect(calls[1]).toEqual({
+          name: "command.execute.after",
+          messageID: calls[0].messageID,
+          status: failure ? "failed" : "completed",
+        })
+        if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("continuation refused")
+      }),
+    { git: true },
+    30_000,
+  )
+}

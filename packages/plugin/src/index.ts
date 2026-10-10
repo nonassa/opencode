@@ -260,8 +260,13 @@ export interface Hooks {
   ) => Promise<void>
   "permission.ask"?: (input: Permission, output: { status: "ask" | "deny" | "allow" }) => Promise<void>
   "command.execute.before"?: (
-    input: { command: string; sessionID: string; arguments: string },
+    input: { command: string; sessionID: string; arguments: string; messageID: string },
     output: { parts: Part[] },
+  ) => Promise<void>
+  /** Runs after every command exit, including refusal before prompt admission. */
+  "command.execute.after"?: (
+    input: { command: string; sessionID: string; arguments: string; messageID: string },
+    output: { status: "completed" | "failed" },
   ) => Promise<void>
   "tool.execute.before"?: (
     input: { tool: string; sessionID: string; messageID?: string; callID: string },

@@ -1353,7 +1353,9 @@ const layer = Layer.effect(
       return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
     })
 
-    const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
+    const executeCommand = Effect.fn("SessionPrompt.executeCommand")(function* (
+      input: CommandInput & { messageID: MessageID },
+    ) {
       yield* Effect.logInfo("command", {
         "session.id": input.sessionID,
         command: input.command,
@@ -1459,7 +1461,7 @@ const layer = Layer.effect(
 
       yield* plugin.trigger(
         "command.execute.before",
-        { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
+        { command: input.command, sessionID: input.sessionID, arguments: input.arguments, messageID: input.messageID },
         { parts },
       )
 
@@ -1478,6 +1480,26 @@ const layer = Layer.effect(
         messageID: result.info.id,
       })
       return result
+    })
+
+    const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
+      const request = { ...input, messageID: input.messageID ?? MessageID.ascending() }
+      return yield* executeCommand(request).pipe(
+        Effect.onExit((exit) =>
+          plugin
+            .trigger(
+              "command.execute.after",
+              {
+                command: request.command,
+                sessionID: request.sessionID,
+                arguments: request.arguments,
+                messageID: request.messageID,
+              },
+              { status: Exit.isSuccess(exit) ? "completed" : "failed" },
+            )
+            .pipe(Effect.catchCause((cause) => Effect.logError("command cleanup failed", { cause }))),
+        ),
+      )
     })
 
     return Service.of({

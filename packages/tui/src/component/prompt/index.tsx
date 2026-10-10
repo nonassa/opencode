@@ -1080,15 +1080,33 @@ export function Prompt(props: PromptProps) {
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
-      void sdk.client.session.command({
-        sessionID,
-        command: command.slice(1),
-        arguments: args,
-        agent: agent.name,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-        variant,
-        parts: nonTextParts.filter((x) => x.type === "file"),
-      })
+      const submitted = structuredClone(unwrap(store.prompt))
+      const origin = props.sessionID
+      void sdk.client.session
+        .command(
+          {
+            sessionID,
+            command: command.slice(1),
+            arguments: args,
+            agent: agent.name,
+            model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+            variant,
+            parts: nonTextParts.filter((x) => x.type === "file"),
+          },
+          { throwOnError: true },
+        )
+        .catch((error) => {
+          // A late refusal must not replace a newer draft or another session's input.
+          if (props.sessionID === origin && !input.isDestroyed && !input.plainText && store.prompt.parts.length === 0) {
+            input.setText(submitted.input)
+            setStore("prompt", submitted)
+            restoreExtmarksFromParts(submitted.parts)
+            input.gotoBufferEnd()
+          } else {
+            stash.push({ input: submitted.input, parts: submitted.parts })
+          }
+          toast.show({ title: "Failed to send prompt", message: errorMessage(error), variant: "error" })
+        })
     } else {
       move.startSubmit()
       sdk.client.session
