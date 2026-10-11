@@ -1939,6 +1939,29 @@ describe("OPENCODE_CONFIG_CONTENT token substitution", () => {
 })
 
 describe("OPENCODE_CONFIG_CONTENT_ONLY", () => {
+  for (const global of [{}, { autoupdate: true }]) {
+    it.effect(`uses injected update policy for global consumers with disk ${JSON.stringify(global)}`, () =>
+      withGlobalConfig({ config: global }, () =>
+        withProcessEnvs(
+          { OPENCODE_CONFIG_CONTENT_ONLY: "1", OPENCODE_CONFIG_CONTENT: '{"autoupdate":false}' },
+          Effect.gen(function* () {
+            expect((yield* Config.use.getGlobal()).autoupdate).toBe(false)
+          }),
+        ),
+      ),
+    )
+  }
+
+  it.effect("does not fall back to disk-global settings when isolated content is absent", () =>
+    withProcessEnvs(
+      { OPENCODE_CONFIG_CONTENT_ONLY: "1", OPENCODE_CONFIG_CONTENT: undefined },
+      Config.use.getGlobal().pipe(
+        Effect.exit,
+        Effect.map((exit) => expect(Exit.isFailure(exit)).toBe(true)),
+      ),
+    ),
+  )
+
   const isolated = configIt({
     auth: Layer.mock(Auth.Service)({
       all: () => Effect.die("content-only mode read authentication configuration"),

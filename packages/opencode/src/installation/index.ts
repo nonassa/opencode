@@ -14,12 +14,20 @@ import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { NpmConfig } from "@opencode-ai/core/npm-config"
 import { InstallationEvent } from "@opencode-ai/schema/installation-event"
+import { Flag } from "@opencode-ai/core/flag/flag"
 
 export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
 
 export type ReleaseType = "patch" | "minor" | "major"
 
 export const Event = InstallationEvent
+
+export const MANAGED_UPDATE_MESSAGE = "OpenCode updates are managed by StratCraft Guide."
+
+export function isUpdateManaged() {
+  // A standalone user's auto-update preference does not prohibit manual upgrades.
+  return Flag.OPENCODE_CONFIG_CONTENT_ONLY && Flag.OPENCODE_DISABLE_AUTOUPDATE
+}
 
 export function getReleaseType(current: string, latest: string): ReleaseType {
   const currMajor = semver.major(current)
@@ -206,6 +214,7 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
         return "unknown" as Method
       }),
       latest: Effect.fn("Installation.latest")(function* (installMethod?: Method) {
+        if (isUpdateManaged()) return yield* Effect.die(new Error(MANAGED_UPDATE_MESSAGE))
         const detectedMethod = installMethod || (yield* result.method())
 
         if (detectedMethod === "brew") {
@@ -263,6 +272,7 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
         return data.tag_name.replace(/^v/, "")
       }, Effect.orDie),
       upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
+        if (isUpdateManaged()) return yield* new UpgradeFailedError({ stderr: MANAGED_UPDATE_MESSAGE })
         let upgradeResult: { code: number; stdout: string; stderr: string } | undefined
         switch (m) {
           case "curl":

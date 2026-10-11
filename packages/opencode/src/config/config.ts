@@ -358,6 +358,14 @@ const layer = Layer.effect(
     )
 
     const getGlobal = Effect.fn("Config.getGlobal")(function* () {
+      // Isolated runtimes also own global consumers such as the startup updater.
+      if (Flag.OPENCODE_CONFIG_CONTENT_ONLY) {
+        const content = process.env.OPENCODE_CONFIG_CONTENT
+        if (!content) {
+          return yield* Effect.die(new Error("OPENCODE_CONFIG_CONTENT_ONLY requires OPENCODE_CONFIG_CONTENT"))
+        }
+        return yield* loadConfig(content, { dir: Global.Path.config, source: "OPENCODE_CONFIG_CONTENT" })
+      }
       return yield* cachedGlobal
     })
 

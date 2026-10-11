@@ -21,6 +21,11 @@ export const UpgradeCommand = {
       })
   },
   handler: async (args: { target?: string; method?: string }) => {
+    if (Installation.isUpdateManaged()) {
+      UI.error(Installation.MANAGED_UPDATE_MESSAGE)
+      process.exitCode = 1
+      return
+    }
     UI.empty()
     UI.println(UI.logo("  "))
     UI.empty()

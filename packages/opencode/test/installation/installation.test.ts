@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { makeGlobalNode } from "@opencode-ai/core/effect/app-node"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
@@ -237,4 +238,92 @@ describe("installation", () => {
       }),
     )
   })
+})
+
+// Transport doubles prevent real downloads and package mutations; the Installation owner is real.
+describe("managed native update policy", () => {
+  const calls: string[] = []
+  const managed = testEffect(
+    testLayer(
+      (request) => {
+        calls.push(request.url)
+        return jsonResponse({ tag_name: "v1.19.0" })
+      },
+      (cmd) => {
+        calls.push(cmd)
+        return "ok"
+      },
+    ),
+  )
+
+  for (const method of ["curl", "npm", "pnpm", "bun", "brew", "choco", "scoop", "unknown"] as const) {
+    managed.effect(`does not execute ${method} native upgrades in managed mode`, () =>
+      Effect.gen(function* () {
+        const prior = Flag.OPENCODE_DISABLE_AUTOUPDATE
+        const contentOnly = process.env.OPENCODE_CONFIG_CONTENT_ONLY
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            Flag.OPENCODE_DISABLE_AUTOUPDATE = true
+            process.env.OPENCODE_CONFIG_CONTENT_ONLY = "1"
+            calls.length = 0
+          }),
+          () =>
+            Effect.sync(() => {
+              Flag.OPENCODE_DISABLE_AUTOUPDATE = prior
+              if (contentOnly === undefined) delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
+              else process.env.OPENCODE_CONFIG_CONTENT_ONLY = contentOnly
+            }),
+        )
+        const outcome = yield* Installation.use.upgrade(method, "1.19.0").pipe(Effect.result)
+        expect(outcome._tag).toBe("Failure")
+        if (outcome._tag === "Failure") expect(outcome.failure.message).toContain("StratCraft Guide")
+        expect(calls).toEqual([])
+      }),
+    )
+  }
+
+  managed.effect("does not query upstream versions in managed mode", () =>
+    Effect.gen(function* () {
+      const prior = Flag.OPENCODE_DISABLE_AUTOUPDATE
+      const contentOnly = process.env.OPENCODE_CONFIG_CONTENT_ONLY
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          Flag.OPENCODE_DISABLE_AUTOUPDATE = true
+          process.env.OPENCODE_CONFIG_CONTENT_ONLY = "1"
+          calls.length = 0
+        }),
+        () =>
+          Effect.sync(() => {
+            Flag.OPENCODE_DISABLE_AUTOUPDATE = prior
+            if (contentOnly === undefined) delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
+            else process.env.OPENCODE_CONFIG_CONTENT_ONLY = contentOnly
+          }),
+      )
+      const outcome = yield* Installation.use.latest("unknown").pipe(Effect.exit)
+      expect(outcome._tag).toBe("Failure")
+      expect(calls).toEqual([])
+    }),
+  )
+
+  managed.effect("standalone automatic-update disabling still permits explicit upgrades", () =>
+    Effect.gen(function* () {
+      const prior = Flag.OPENCODE_DISABLE_AUTOUPDATE
+      const contentOnly = process.env.OPENCODE_CONFIG_CONTENT_ONLY
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          Flag.OPENCODE_DISABLE_AUTOUPDATE = true
+          delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
+          calls.length = 0
+        }),
+        () =>
+          Effect.sync(() => {
+            Flag.OPENCODE_DISABLE_AUTOUPDATE = prior
+            if (contentOnly === undefined) delete process.env.OPENCODE_CONFIG_CONTENT_ONLY
+            else process.env.OPENCODE_CONFIG_CONTENT_ONLY = contentOnly
+          }),
+      )
+      yield* Installation.use.upgrade("npm", "1.19.0")
+      expect(calls).toContain("npm")
+    }),
+  )
 })
