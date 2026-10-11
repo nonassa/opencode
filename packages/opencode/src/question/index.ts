@@ -26,8 +26,12 @@ export const Replied = QuestionV1.Replied
 export const Rejected = QuestionV1.Rejected
 export const Event = QuestionV1.Event
 
-export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("QuestionRejectedError", {}) {
+export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("QuestionRejectedError", {
+  reason: Schema.optional(Schema.Literal("invalid-request")),
+}) {
   override get message() {
+    if (this.reason === "invalid-request")
+      return "The question request must contain at least one complete question. Rewrite the question input."
     return "The user dismissed this question"
   }
 }
@@ -93,6 +97,9 @@ const layer = Layer.effect(
       questions: ReadonlyArray<Info>
       tool?: Tool
     }) {
+      if (!Schema.is(Schema.Array(Info).check(Schema.isMinLength(1)))(input.questions)) {
+        return yield* new RejectedError({ reason: "invalid-request" })
+      }
       const pending = (yield* InstanceState.get(state)).pending
       const id = QuestionID.ascending()
       yield* Effect.logInfo("asking", { id, questions: input.questions.length })
@@ -126,6 +133,7 @@ const layer = Layer.effect(
         yield* Effect.logWarning("reply for unknown request", { requestID: input.requestID })
         return yield* new NotFoundError({ requestID: input.requestID })
       }
+      if (existing.info.questions.length === 0) return yield* reject(input.requestID)
       pending.delete(input.requestID)
       yield* Effect.logInfo("replied", { requestID: input.requestID, answers: input.answers })
       yield* events.publish(Event.Replied, {
@@ -149,11 +157,18 @@ const layer = Layer.effect(
         sessionID: existing.info.sessionID,
         requestID: existing.info.id,
       })
-      yield* Deferred.fail(existing.deferred, new RejectedError())
+      yield* Deferred.fail(
+        existing.deferred,
+        new RejectedError(existing.info.questions.length === 0 ? { reason: "invalid-request" } : {}),
+      )
     })
 
     const list = Effect.fn("Question.list")(function* () {
       const pending = (yield* InstanceState.get(state)).pending
+      for (const item of pending.values()) {
+        if (item.info.questions.length === 0)
+          yield* reject(item.info.id).pipe(Effect.catchTag("Question.NotFoundError", () => Effect.void))
+      }
       return Array.from(pending.values(), (x) => x.info)
     })
 

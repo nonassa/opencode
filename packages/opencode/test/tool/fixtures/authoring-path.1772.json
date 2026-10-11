@@ -1,0 +1,45 @@
+{
+  "catalogVersion": "1.0.0",
+  "locale": "en_US",
+  "targetRuntime": "python-backtrader-v1",
+  "algorithmBrowsingEmptyState": null,
+  "sections": [
+    {
+      "sectionId": "strategy-styles",
+      "label": "Strategy styles",
+      "items": [
+        {
+          "itemId": "trend-following",
+          "label": "Trend following",
+          "description": "Explore public trend systems."
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "questionId": "authoring-path",
+      "header": "How to continue",
+      "question": "How would you like to continue?",
+      "selectionMode": "single",
+      "customAnswerPolicy": "allowed",
+      "options": [
+        {
+          "optionId": "browse-public-algorithms",
+          "label": "Browse public algorithms",
+          "description": "Browse next."
+        },
+        {
+          "optionId": "recommend-starting-point",
+          "label": "Recommend a starting point",
+          "description": "Recommend one."
+        }
+      ]
+    }
+  ],
+  "effects": {
+    "createsStrategyRules": false,
+    "allowsExecutableAction": false
+  },
+  "projectionHash": "25e8479b7e8c7ef69d9912b8c4256d8eb1ee186296d2323de3844efbafcb063d"
+}

@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { useRenderer } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
 import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
@@ -15,6 +15,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   const sdk = useSDK()
   const { theme } = useTheme()
   const renderer = useRenderer()
+  const dimensions = useTerminalDimensions()
   const tuiConfig = useTuiConfig()
   const modeStack = useOpencodeModeStack()
 
@@ -22,6 +23,8 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   const single = createMemo(() => questions().length === 1 && questions()[0]?.multiple !== true)
   const tabs = createMemo(() => (single() ? 1 : questions().length + 1)) // questions + confirm tab (no confirm for single select)
   const [tabHover, setTabHover] = createSignal<number | "confirm" | null>(null)
+  const [rejecting, setRejecting] = createSignal(false)
+  const [rejectionFailed, setRejectionFailed] = createSignal(false)
   const [store, setStore] = createStore({
     tab: 0,
     answers: [] as QuestionAnswer[],
@@ -55,10 +58,17 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   }
 
   function reject() {
-    void sdk.client.question.reject({
-      requestID: props.request.id,
-      directory: props.directory,
-    })
+    if (rejecting()) return
+    setRejecting(true)
+    setRejectionFailed(false)
+    void sdk.client.question
+      .reject({
+        requestID: props.request.id,
+        directory: props.directory,
+      })
+      .then((result) => setRejectionFailed(Boolean(result.error)))
+      .catch(() => setRejectionFailed(true))
+      .finally(() => setRejecting(false))
   }
 
   function pick(answer: string, custom: boolean = false) {
@@ -129,7 +139,14 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   onMount(() => {
     const popMode = modeStack.push(QUESTION_MODE)
     onCleanup(popMode)
+    if (questions().length === 0) reject()
   })
+
+  useBindings(() => ({
+    mode: QUESTION_MODE,
+    enabled: questions().length === 0 && rejectionFailed() && !rejecting(),
+    bindings: [{ key: "escape", desc: "Retry dismissing invalid question", group: "Question", cmd: reject }],
+  }))
 
   useBindings(() => ({
     mode: QUESTION_MODE,
@@ -214,7 +231,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
 
     return {
       mode: QUESTION_MODE,
-      enabled: !store.editing,
+      enabled: !store.editing && questions().length > 0,
       commands: [
         {
           name: "app.exit",
@@ -287,232 +304,272 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   })
 
   return (
-    <box
-      backgroundColor={theme.backgroundPanel}
-      border={["left"]}
-      borderColor={theme.accent}
-      customBorderChars={SplitBorder.customBorderChars}
+    <Show
+      when={questions().length > 0}
+      fallback={
+        <box backgroundColor={theme.backgroundPanel} padding={1}>
+          <text fg={theme.error}>The question request is empty. No answer was submitted.</text>
+          <text fg={theme.textMuted}>
+            {rejectionFailed()
+              ? "Could not dismiss the invalid request. Press Escape to retry."
+              : "Dismissing the invalid request."}
+          </text>
+        </box>
+      }
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
-        <Show when={!single()}>
-          <box flexDirection="row" gap={1} paddingLeft={1}>
-            <For each={questions()}>
-              {(q, index) => {
-                const isActive = () => index() === store.tab
-                const isAnswered = () => {
-                  return (store.answers[index()]?.length ?? 0) > 0
+      <box
+        backgroundColor={theme.backgroundPanel}
+        border={["left"]}
+        borderColor={theme.accent}
+        customBorderChars={SplitBorder.customBorderChars}
+      >
+        <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+          <Show when={props.request.orientation?.length}>
+            <scrollbox
+              maxHeight={Math.max(1, Math.floor(dimensions().height / 3))}
+              scrollbarOptions={{ visible: true }}
+            >
+              <For each={props.request.orientation}>
+                {(section) => (
+                  <box gap={1} paddingLeft={1}>
+                    <text fg={theme.text}>{section.label}</text>
+                    <For each={section.items}>
+                      {(item) => (
+                        <box>
+                          <text fg={theme.text}>{item.label}</text>
+                          <text fg={theme.textMuted}>{item.description}</text>
+                        </box>
+                      )}
+                    </For>
+                  </box>
+                )}
+              </For>
+            </scrollbox>
+          </Show>
+          <Show when={!single()}>
+            <box flexDirection="row" gap={1} paddingLeft={1}>
+              <For each={questions()}>
+                {(q, index) => {
+                  const isActive = () => index() === store.tab
+                  const isAnswered = () => {
+                    return (store.answers[index()]?.length ?? 0) > 0
+                  }
+                  return (
+                    <box
+                      paddingLeft={1}
+                      paddingRight={1}
+                      backgroundColor={
+                        isActive()
+                          ? theme.accent
+                          : tabHover() === index()
+                            ? theme.backgroundElement
+                            : theme.backgroundPanel
+                      }
+                      onMouseOver={() => setTabHover(index())}
+                      onMouseOut={() => setTabHover(null)}
+                      onMouseUp={() => {
+                        if (renderer.getSelection()?.getSelectedText()) return
+                        selectTab(index())
+                      }}
+                    >
+                      <text
+                        fg={
+                          isActive()
+                            ? selectedForeground(theme, theme.accent)
+                            : isAnswered()
+                              ? theme.text
+                              : theme.textMuted
+                        }
+                      >
+                        {q.header}
+                      </text>
+                    </box>
+                  )
+                }}
+              </For>
+              <box
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={
+                  confirm() ? theme.accent : tabHover() === "confirm" ? theme.backgroundElement : theme.backgroundPanel
                 }
-                return (
+                onMouseOver={() => setTabHover("confirm")}
+                onMouseOut={() => setTabHover(null)}
+                onMouseUp={() => {
+                  if (renderer.getSelection()?.getSelectedText()) return
+                  selectTab(questions().length)
+                }}
+              >
+                <text fg={confirm() ? selectedForeground(theme, theme.accent) : theme.textMuted}>Confirm</text>
+              </box>
+            </box>
+          </Show>
+
+          <Show when={!confirm()}>
+            <box paddingLeft={1} gap={1}>
+              <box>
+                <text fg={theme.text}>
+                  {question()?.question}
+                  {multi() ? " (select all that apply)" : ""}
+                </text>
+              </box>
+              <box>
+                <For each={options()}>
+                  {(opt, i) => {
+                    const active = () => i() === store.selected
+                    const picked = () => store.answers[store.tab]?.includes(opt.optionId ?? opt.label) ?? false
+                    return (
+                      <box
+                        onMouseOver={() => moveTo(i())}
+                        onMouseDown={() => moveTo(i())}
+                        onMouseUp={() => {
+                          if (renderer.getSelection()?.getSelectedText()) return
+                          selectOption()
+                        }}
+                      >
+                        <box flexDirection="row">
+                          <box backgroundColor={active() ? theme.backgroundElement : undefined} paddingRight={1}>
+                            <text fg={active() ? tint(theme.textMuted, theme.secondary, 0.6) : theme.textMuted}>
+                              {`${i() + 1}.`}
+                            </text>
+                          </box>
+                          <box backgroundColor={active() ? theme.backgroundElement : undefined}>
+                            <text fg={active() ? theme.secondary : picked() ? theme.success : theme.text}>
+                              {multi() ? `[${picked() ? "✓" : " "}] ${opt.label}` : opt.label}
+                            </text>
+                          </box>
+                          <Show when={!multi()}>
+                            <text fg={theme.success}>{picked() ? " ✓" : ""}</text>
+                          </Show>
+                        </box>
+
+                        <box paddingLeft={3}>
+                          <text fg={theme.textMuted}>{opt.description}</text>
+                        </box>
+                      </box>
+                    )
+                  }}
+                </For>
+                <Show when={custom()}>
                   <box
-                    paddingLeft={1}
-                    paddingRight={1}
-                    backgroundColor={
-                      isActive()
-                        ? theme.accent
-                        : tabHover() === index()
-                          ? theme.backgroundElement
-                          : theme.backgroundPanel
-                    }
-                    onMouseOver={() => setTabHover(index())}
-                    onMouseOut={() => setTabHover(null)}
+                    onMouseOver={() => moveTo(options().length)}
+                    onMouseDown={() => moveTo(options().length)}
                     onMouseUp={() => {
                       if (renderer.getSelection()?.getSelectedText()) return
-                      selectTab(index())
+                      selectOption()
                     }}
                   >
-                    <text
-                      fg={
-                        isActive()
-                          ? selectedForeground(theme, theme.accent)
-                          : isAnswered()
-                            ? theme.text
-                            : theme.textMuted
-                      }
-                    >
-                      {q.header}
+                    <box flexDirection="row">
+                      <box backgroundColor={other() ? theme.backgroundElement : undefined} paddingRight={1}>
+                        <text fg={other() ? tint(theme.textMuted, theme.secondary, 0.6) : theme.textMuted}>
+                          {`${options().length + 1}.`}
+                        </text>
+                      </box>
+                      <box backgroundColor={other() ? theme.backgroundElement : undefined}>
+                        <text fg={other() ? theme.secondary : customPicked() ? theme.success : theme.text}>
+                          {multi() ? `[${customPicked() ? "✓" : " "}] Type your own answer` : "Type your own answer"}
+                        </text>
+                      </box>
+
+                      <Show when={!multi()}>
+                        <text fg={theme.success}>{customPicked() ? " ✓" : ""}</text>
+                      </Show>
+                    </box>
+                    <Show when={store.editing}>
+                      <box paddingLeft={3}>
+                        <textarea
+                          ref={(val: TextareaRenderable) => {
+                            textarea = val
+                            val.traits = { status: "ANSWER" }
+                            queueMicrotask(() => {
+                              val.focus()
+                              val.gotoLineEnd()
+                            })
+                          }}
+                          initialValue={input()}
+                          placeholder="Type your own answer"
+                          placeholderColor={theme.textMuted}
+                          minHeight={1}
+                          maxHeight={6}
+                          textColor={theme.text}
+                          focusedTextColor={theme.text}
+                          cursorColor={theme.primary}
+                          cursorStyle={tuiConfig.cursor}
+                        />
+                      </box>
+                    </Show>
+                    <Show when={!store.editing && input()}>
+                      <box paddingLeft={3}>
+                        <text fg={theme.textMuted}>{input()}</text>
+                      </box>
+                    </Show>
+                  </box>
+                </Show>
+              </box>
+            </box>
+          </Show>
+
+          <Show when={confirm() && !single()}>
+            <box paddingLeft={1}>
+              <text fg={theme.text}>Review</text>
+            </box>
+            <For each={questions()}>
+              {(q, index) => {
+                const value = () =>
+                  store.answers[index()]
+                    ?.map(
+                      (answer) =>
+                        q.options.find((option) => (option.optionId ?? option.label) === answer)?.label ?? answer,
+                    )
+                    .join(", ") ?? ""
+                const answered = () => Boolean(value())
+                return (
+                  <box paddingLeft={1}>
+                    <text>
+                      <span style={{ fg: theme.textMuted }}>{q.header}:</span>{" "}
+                      <span style={{ fg: answered() ? theme.text : theme.error }}>
+                        {answered() ? value() : "(not answered)"}
+                      </span>
                     </text>
                   </box>
                 )
               }}
             </For>
-            <box
-              paddingLeft={1}
-              paddingRight={1}
-              backgroundColor={
-                confirm() ? theme.accent : tabHover() === "confirm" ? theme.backgroundElement : theme.backgroundPanel
-              }
-              onMouseOver={() => setTabHover("confirm")}
-              onMouseOut={() => setTabHover(null)}
-              onMouseUp={() => {
-                if (renderer.getSelection()?.getSelectedText()) return
-                selectTab(questions().length)
-              }}
-            >
-              <text fg={confirm() ? selectedForeground(theme, theme.accent) : theme.textMuted}>Confirm</text>
-            </box>
-          </box>
-        </Show>
-
-        <Show when={!confirm()}>
-          <box paddingLeft={1} gap={1}>
-            <box>
+          </Show>
+        </box>
+        <box
+          flexDirection="row"
+          flexShrink={0}
+          gap={1}
+          paddingLeft={2}
+          paddingRight={3}
+          paddingBottom={1}
+          justifyContent="space-between"
+        >
+          <box flexDirection="row" gap={2}>
+            <Show when={!single()}>
               <text fg={theme.text}>
-                {question()?.question}
-                {multi() ? " (select all that apply)" : ""}
+                {"⇆"} <span style={{ fg: theme.textMuted }}>tab</span>
               </text>
-            </box>
-            <box>
-              <For each={options()}>
-                {(opt, i) => {
-                  const active = () => i() === store.selected
-                  const picked = () => store.answers[store.tab]?.includes(opt.optionId ?? opt.label) ?? false
-                  return (
-                    <box
-                      onMouseOver={() => moveTo(i())}
-                      onMouseDown={() => moveTo(i())}
-                      onMouseUp={() => {
-                        if (renderer.getSelection()?.getSelectedText()) return
-                        selectOption()
-                      }}
-                    >
-                      <box flexDirection="row">
-                        <box backgroundColor={active() ? theme.backgroundElement : undefined} paddingRight={1}>
-                          <text fg={active() ? tint(theme.textMuted, theme.secondary, 0.6) : theme.textMuted}>
-                            {`${i() + 1}.`}
-                          </text>
-                        </box>
-                        <box backgroundColor={active() ? theme.backgroundElement : undefined}>
-                          <text fg={active() ? theme.secondary : picked() ? theme.success : theme.text}>
-                            {multi() ? `[${picked() ? "✓" : " "}] ${opt.label}` : opt.label}
-                          </text>
-                        </box>
-                        <Show when={!multi()}>
-                          <text fg={theme.success}>{picked() ? " ✓" : ""}</text>
-                        </Show>
-                      </box>
-
-                      <box paddingLeft={3}>
-                        <text fg={theme.textMuted}>{opt.description}</text>
-                      </box>
-                    </box>
-                  )
-                }}
-              </For>
-              <Show when={custom()}>
-                <box
-                  onMouseOver={() => moveTo(options().length)}
-                  onMouseDown={() => moveTo(options().length)}
-                  onMouseUp={() => {
-                    if (renderer.getSelection()?.getSelectedText()) return
-                    selectOption()
-                  }}
-                >
-                  <box flexDirection="row">
-                    <box backgroundColor={other() ? theme.backgroundElement : undefined} paddingRight={1}>
-                      <text fg={other() ? tint(theme.textMuted, theme.secondary, 0.6) : theme.textMuted}>
-                        {`${options().length + 1}.`}
-                      </text>
-                    </box>
-                    <box backgroundColor={other() ? theme.backgroundElement : undefined}>
-                      <text fg={other() ? theme.secondary : customPicked() ? theme.success : theme.text}>
-                        {multi() ? `[${customPicked() ? "✓" : " "}] Type your own answer` : "Type your own answer"}
-                      </text>
-                    </box>
-
-                    <Show when={!multi()}>
-                      <text fg={theme.success}>{customPicked() ? " ✓" : ""}</text>
-                    </Show>
-                  </box>
-                  <Show when={store.editing}>
-                    <box paddingLeft={3}>
-                      <textarea
-                        ref={(val: TextareaRenderable) => {
-                          textarea = val
-                          val.traits = { status: "ANSWER" }
-                          queueMicrotask(() => {
-                            val.focus()
-                            val.gotoLineEnd()
-                          })
-                        }}
-                        initialValue={input()}
-                        placeholder="Type your own answer"
-                        placeholderColor={theme.textMuted}
-                        minHeight={1}
-                        maxHeight={6}
-                        textColor={theme.text}
-                        focusedTextColor={theme.text}
-                        cursorColor={theme.primary}
-                        cursorStyle={tuiConfig.cursor}
-                      />
-                    </box>
-                  </Show>
-                  <Show when={!store.editing && input()}>
-                    <box paddingLeft={3}>
-                      <text fg={theme.textMuted}>{input()}</text>
-                    </box>
-                  </Show>
-                </box>
-              </Show>
-            </box>
-          </box>
-        </Show>
-
-        <Show when={confirm() && !single()}>
-          <box paddingLeft={1}>
-            <text fg={theme.text}>Review</text>
-          </box>
-          <For each={questions()}>
-            {(q, index) => {
-              const value = () => store.answers[index()]?.map((answer) => (
-                q.options.find((option) => (option.optionId ?? option.label) === answer)?.label ?? answer
-              )).join(", ") ?? ""
-              const answered = () => Boolean(value())
-              return (
-                <box paddingLeft={1}>
-                  <text>
-                    <span style={{ fg: theme.textMuted }}>{q.header}:</span>{" "}
-                    <span style={{ fg: answered() ? theme.text : theme.error }}>
-                      {answered() ? value() : "(not answered)"}
-                    </span>
-                  </text>
-                </box>
-              )
-            }}
-          </For>
-        </Show>
-      </box>
-      <box
-        flexDirection="row"
-        flexShrink={0}
-        gap={1}
-        paddingLeft={2}
-        paddingRight={3}
-        paddingBottom={1}
-        justifyContent="space-between"
-      >
-        <box flexDirection="row" gap={2}>
-          <Show when={!single()}>
+            </Show>
+            <Show when={!confirm()}>
+              <text fg={theme.text}>
+                {"↑↓"} <span style={{ fg: theme.textMuted }}>select</span>
+              </text>
+            </Show>
             <text fg={theme.text}>
-              {"⇆"} <span style={{ fg: theme.textMuted }}>tab</span>
+              enter{" "}
+              <span style={{ fg: theme.textMuted }}>
+                {confirm() ? "submit" : multi() ? "toggle" : single() ? "submit" : "confirm"}
+              </span>
             </text>
-          </Show>
-          <Show when={!confirm()}>
-            <text fg={theme.text}>
-              {"↑↓"} <span style={{ fg: theme.textMuted }}>select</span>
-            </text>
-          </Show>
-          <text fg={theme.text}>
-            enter{" "}
-            <span style={{ fg: theme.textMuted }}>
-              {confirm() ? "submit" : multi() ? "toggle" : single() ? "submit" : "confirm"}
-            </span>
-          </text>
 
-          <text fg={theme.text}>
-            esc <span style={{ fg: theme.textMuted }}>dismiss</span>
-          </text>
+            <text fg={theme.text}>
+              esc <span style={{ fg: theme.textMuted }}>dismiss</span>
+            </text>
+          </box>
         </box>
       </box>
-    </box>
+    </Show>
   )
 }

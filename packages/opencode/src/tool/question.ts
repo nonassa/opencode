@@ -8,10 +8,12 @@ import { Config } from "@/config/config"
 
 export const Parameters = Schema.Struct({
   questions: Schema.optional(
-    Schema.mutable(Schema.Array(Question.Prompt)).annotate({ description: "Questions to ask" }),
+    Schema.mutable(Schema.Array(Question.Prompt))
+      .check(Schema.isMinLength(1))
+      .annotate({ description: "Questions to ask" }),
   ),
   catalogQuestionIds: Schema.optional(
-    Schema.mutable(Schema.Array(Schema.String)).annotate({
+    Schema.mutable(Schema.Array(Schema.String)).check(Schema.isMinLength(1)).annotate({
       description: "Exact Strategy Authoring question IDs from the managed workspace catalog",
     }),
   ),
@@ -39,6 +41,10 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
     return {
       description: DESCRIPTION,
       parameters: Parameters,
+      formatValidationError: () =>
+        "Provide at least one complete question, or use top-level catalogQuestionIds for an admitted catalog question. " +
+        'For the Strategy Authoring starting choices, use only {"catalogQuestionIds":["authoring-path"]}. ' +
+        "Empty arrays and nested catalogQuestions are invalid.",
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
           const settings = params.catalogQuestionIds !== undefined ? yield* config.get() : undefined

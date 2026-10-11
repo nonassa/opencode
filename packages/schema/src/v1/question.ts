@@ -35,7 +35,7 @@ export const OrientationSection = Schema.Struct({
 }).annotate({ identifier: "QuestionOrientationSection" })
 
 const base = {
-  question: Schema.String.annotate({ description: "Complete question" }),
+  question: Schema.String.check(Schema.isPattern(/\S/)).annotate({ description: "Complete question" }),
   header: Schema.String.annotate({ description: "Very short label (max 30 chars)" }),
   multiple: Schema.optional(Schema.Boolean).annotate({ description: "Allow selecting multiple choices" }),
 }

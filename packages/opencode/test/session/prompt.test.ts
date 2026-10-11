@@ -2674,3 +2674,107 @@ for (const failure of ["command.execute.before", "chat.message", undefined]) {
     30_000,
   )
 }
+
+it.instance("1772 invalid legacy question resumes the same native model loop", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const question = yield* Question.Service
+    const session = yield* sessions.create({
+      title: "Legacy empty question",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "begin" }],
+    })
+    yield* llm.tool("question", {
+      questions: [{ question: "Continue?", header: "Continue", options: [{ label: "Yes", description: "Continue." }] }],
+    })
+    yield* llm.text("correcting invalid input")
+    const fiber = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.forkChild)
+    const pending = yield* pollWithTimeout(
+      question.list().pipe(Effect.map((items) => items[0])),
+      "waiting for native question",
+    )
+    // Simulate a retained pre-upgrade projection without adding a test-only owner API.
+    ;(pending.questions as Question.Info[]).splice(0)
+    yield* question.reject(pending.id)
+    const result = yield* Fiber.join(fiber)
+    expect(yield* llm.calls).toBe(2)
+    expect(result.parts.some((part) => part.type === "text" && part.text === "correcting invalid input")).toBe(true)
+    const history = JSON.stringify((yield* llm.hits)[1]?.body)
+    expect(history).toContain("Rewrite the question input")
+    expect(history).not.toContain("User has answered")
+  }),
+)
+
+for (const invalid of [
+  { questions: [] },
+  { catalogQuestions: [{ catalogQuestionIds: ["authoring-path"] }], questions: [] },
+]) {
+  it.instance(`1772 native provider repairs ${JSON.stringify(invalid)} into the bound catalog`, () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const task = path.join(dir, ".stratcraft", "tasks", "bound-task")
+      const agents = path.join(task, "AGENTS.md")
+      yield* writeText(agents, 'Use question with top-level {"catalogQuestionIds":["authoring-path"]}.')
+      const projection = yield* Effect.promise(() =>
+        Bun.file(new URL("../tool/fixtures/authoring-path.1772.json", import.meta.url)).text(),
+      )
+      yield* writeText(path.join(task, "instructions", "strategy-authoring-orientation.json"), projection)
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        instructions: [agents],
+        mcp: {
+          stratforge: {
+            type: "remote",
+            url: "http://127.0.0.1:7789/mcp/authoring",
+            headers: { "X-StratCraft-Authoring-Task-Id": "bound-task" },
+          },
+        },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const question = yield* Question.Service
+      const session = yield* sessions.create({
+        title: "Starting an algorithm",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "how can we start to write a algo" }],
+      })
+      yield* llm.tool("question", invalid)
+      yield* llm.tool("question", { catalogQuestionIds: ["authoring-path"] })
+      yield* llm.text("continued from the real choice")
+      const fiber = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.forkChild)
+      const pending = yield* pollWithTimeout(
+        question.list().pipe(Effect.map((items) => items[0])),
+        "waiting for corrected catalog question",
+      )
+      expect(pending.sessionID).toBe(session.id)
+      expect(pending.questions.map((item) => item.questionId)).toEqual(["authoring-path"])
+      expect(pending.orientation?.[0].label).toBe("Strategy styles")
+      expect(yield* llm.calls).toBe(2)
+      yield* question.reply({ requestID: pending.id, answers: [["browse-public-algorithms"]] })
+      const result = yield* Fiber.join(fiber)
+      expect(yield* llm.calls).toBe(3)
+      expect(result.parts.some((part) => part.type === "text" && part.text === "continued from the real choice")).toBe(
+        true,
+      )
+      const messages = yield* MessageV2.filterCompactedEffect(session.id)
+      const tools = messages
+        .flatMap((message) => message.parts)
+        .filter((part): part is SessionV1.ToolPart => part.type === "tool")
+      expect(tools[0].state.status).toBe("error")
+      expect(tools[1].state.status).toBe("completed")
+      expect(JSON.stringify((yield* llm.hits)[2]?.body)).toContain("browse-public-algorithms")
+    }),
+  )
+}
