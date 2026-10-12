@@ -8,6 +8,25 @@ import { Effect } from "effect"
 
 const options = { toolCallId: "call_mcp", abortSignal: new AbortController().signal } as any
 
+test("native MCP actor metadata is per call and outside model arguments", async () => {
+  const calls: unknown[] = []
+  const client = { callTool: async (request: unknown) => {
+    calls.push(request)
+    return { content: [{ type: "text", text: "ok" }] }
+  } } as unknown as Client
+  const def = mcpTool()
+  const reader = McpCatalog.convertTool(def, client, undefined, undefined,
+    { nativeSessionId: "reader" })
+  const coder = McpCatalog.convertTool(def, client, undefined, undefined,
+    { nativeSessionId: "coder" })
+  await Promise.all([reader.execute?.({}, { ...options, toolCallId: "reader-call" }),
+    coder.execute?.({}, { ...options, toolCallId: "coder-call" })])
+  expect(calls).toEqual([
+    { name: "screenshot", arguments: {}, _meta: { stratcraftNativeActor: { nativeSessionId: "reader" } } },
+    { name: "screenshot", arguments: {}, _meta: { stratcraftNativeActor: { nativeSessionId: "coder" } } },
+  ])
+})
+
 function clientReturning(result: unknown) {
   return {
     callTool: async () => result,

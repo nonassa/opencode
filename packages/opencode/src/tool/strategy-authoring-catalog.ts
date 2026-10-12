@@ -184,15 +184,34 @@ function parseProjection(value: unknown): Projection {
 }
 
 export function loadStrategyAuthoringInteraction(directory: string, questionIds: readonly string[]) {
-  if (questionIds.length === 0 || new Set(questionIds).size !== questionIds.length) {
-    throw new Error("Catalog question IDs must be non-empty and unique")
-  }
   const filename = path.join(directory, relativePath)
   let projection: Projection
   try {
     projection = parseProjection(JSON.parse(readFileSync(filename, "utf8")))
   } catch (error) {
     throw new Error(`Cannot load verified Strategy Authoring orientation '${filename}': ${String(error)}`)
+  }
+  return selectInteraction(projection, questionIds)
+}
+
+/** Task-free catalog reads use the same authenticated project orientation owner. */
+export async function loadStrategyProjectAuthoringInteraction(
+  url: string, headers: Record<string, string> | undefined, nativeSessionId: string, questionIds: readonly string[],
+) {
+  const endpoint = new URL(url)
+  endpoint.pathname = endpoint.pathname.replace(/\/$/, "") + "/orientation"
+  const response = await fetch(endpoint, {
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ nativeSessionId }), redirect: "error",
+  })
+  if (!response.ok) throw new Error(`Strategy Authoring project orientation is unavailable (HTTP ${response.status})`)
+  const result = await response.json() as { questionCatalog?: unknown }
+  return selectInteraction(parseProjection(result.questionCatalog), questionIds)
+}
+
+function selectInteraction(projection: Projection, questionIds: readonly string[]) {
+  if (questionIds.length === 0 || new Set(questionIds).size !== questionIds.length) {
+    throw new Error("Catalog question IDs must be non-empty and unique")
   }
   const byId = new Map(projection.questions.map((question) => [question.questionId, question]))
   const selected = questionIds.map((questionId) => {

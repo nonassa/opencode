@@ -46,6 +46,55 @@ const pending = Effect.fn("QuestionToolTest.pending")(function* (question: Quest
 })
 
 describe("tool.question", () => {
+  it.instance("renders task-free project choices and consumes clicked and typed answers once", () =>
+    Effect.gen(function* () {
+      const question = yield* Question.Service
+      const toolInfo = yield* QuestionTool
+      const tool = yield* toolInfo.init()
+      for (const answer of ["browse-public-algorithms", "My own strategy idea"]) {
+        const fiber = yield* tool.execute({ catalogQuestionIds: ["authoring-path"] }, ctx).pipe(Effect.forkScoped)
+        const item = yield* pending(question)
+        expect(item.orientation?.[0]).toMatchObject({ sectionId: "examples", label: "Examples" })
+        expect(item.questions[0]).toMatchObject({ questionId: "authoring-path", custom: true, multiple: false,
+          options: [{ optionId: "browse-public-algorithms" }, { optionId: "recommend-starting-point" }] })
+        yield* question.reply({ requestID: item.id, answers: [[answer]] })
+        expect((yield* Fiber.join(fiber)).metadata.answers).toEqual([[answer]])
+        expect(yield* question.list()).toEqual([])
+      }
+    }),
+    { init: directory => Effect.gen(function* () {
+      const projection = {
+        catalogVersion: "1.0.0", locale: "en_US", targetRuntime: "python-backtrader-v1",
+        algorithmBrowsingEmptyState: null,
+        sections: [{ sectionId: "examples", label: "Examples", items: [{ itemId: "public", label: "Public", description: "Browse." }] }],
+        questions: [{ questionId: "authoring-path", header: "Start", question: "How to start?",
+          selectionMode: "single", customAnswerPolicy: "allowed", options: [
+            { optionId: "browse-public-algorithms", label: "Browse public algorithms", description: "Browse." },
+            { optionId: "recommend-starting-point", label: "Recommend a starting point", description: "Recommend." },
+          ] }],
+        effects: { createsStrategyRules: false, allowsExecutableAction: false },
+      }
+      const canonical = (value: unknown): string => {
+        if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+        if (value !== null && typeof value === "object") return `{${Object.entries(value)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(",")}}`
+        return JSON.stringify(value)
+      }
+      const server = yield* Effect.acquireRelease(Effect.sync(() => Bun.serve({ port: 0, hostname: "127.0.0.1",
+        async fetch(request) {
+          expect(request.headers.get("Authorization")).toBe("Bearer task-free-lease")
+          expect(await request.json()).toEqual({ nativeSessionId: ctx.sessionID })
+          return Response.json({ questionCatalog: { ...projection,
+            projectionHash: createHash("sha256").update(canonical(projection)).digest("hex") } })
+        },
+      })), server => Effect.sync(() => server.stop(true)))
+      yield* Effect.promise(() => writeFile(path.join(directory, "opencode.json"), JSON.stringify({
+        mcp: { stratforge: { type: "remote", url: `http://127.0.0.1:${server.port}/mcp/authoring`,
+          headers: { Authorization: "Bearer task-free-lease" } } },
+      })))
+    }) },
+  )
   it.instance(
     "renders exact StratCraft catalog-backed questions",
     () =>

@@ -7,7 +7,6 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { dynamicTool, jsonSchema, type JSONSchema7, type Tool } from "ai"
 import { Effect } from "effect"
-
 const DEFAULT_TIMEOUT = 30_000
 const MAX_LIST_PAGES = 1_000
 
@@ -39,7 +38,8 @@ export function defs(client: Client, timeout?: number) {
   return listTools(client, timeout ?? DEFAULT_TIMEOUT).pipe(Effect.catch(() => Effect.void))
 }
 
-export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: number, runtimeMetadata?: Record<string, unknown>): Tool {
+export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: number, runtimeMetadata?: Record<string, unknown>,
+  nativeActor?: { nativeSessionId: string }): Tool {
   const inputSchema: JSONSchema7 = {
     ...(mcpTool.inputSchema as JSONSchema7),
     type: "object",
@@ -55,7 +55,10 @@ export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: numbe
         {
           name: mcpTool.name,
           arguments: (args || {}) as Record<string, unknown>,
-          ...(runtimeMetadata === undefined ? {} : { _meta: runtimeMetadata }),
+          ...(runtimeMetadata === undefined && nativeActor === undefined ? {} : { _meta: {
+            ...runtimeMetadata,
+            ...(nativeActor ? { stratcraftNativeActor: nativeActor } : {}),
+          } }),
         },
         CallToolResultSchema,
         {

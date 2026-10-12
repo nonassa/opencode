@@ -4,6 +4,7 @@ import path from "node:path"
 import { describe, expect, test } from "bun:test"
 import {
   loadStrategyAuthoringInteraction,
+  loadStrategyProjectAuthoringInteraction,
   loadStrategyAuthoringQuestions,
   resolveStrategyAuthoringDirectory,
 } from "../../src/tool/strategy-authoring-catalog"
@@ -80,6 +81,35 @@ async function writeProjection(directory: string, projection: unknown, hashSourc
 }
 
 describe("Strategy Authoring catalog question adapter", () => {
+  test("does not turn a refused task-free orientation into choices or expose its response body", async () => {
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() {
+      return new Response("private-response-body", { status: 403 })
+    } })
+    try {
+      await expect(loadStrategyProjectAuthoringInteraction(
+        `http://127.0.0.1:${server.port}/mcp/authoring`, { Authorization: "Bearer revoked-lease" },
+        "owning-root", ["authoring-path"],
+      )).rejects.toThrow("Strategy Authoring project orientation is unavailable (HTTP 403)")
+    } finally { server.stop(true) }
+  })
+  test("loads task-free choices from the authenticated owning project without borrowing a task", async () => {
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+      expect(new URL(request.url).pathname).toBe("/mcp/authoring/orientation")
+      expect(request.headers.get("Authorization")).toBe("Bearer owned-lease")
+      expect(await request.json()).toEqual({ nativeSessionId: "owning-root" })
+      return Response.json({ questionCatalog: { ...base,
+        projectionHash: createHash("sha256").update(canonical(base), "utf8").digest("hex") } })
+    } })
+    try {
+      const interaction = await loadStrategyProjectAuthoringInteraction(
+        `http://127.0.0.1:${server.port}/mcp/authoring`, { Authorization: "Bearer owned-lease" },
+        "owning-root", ["authoring-path"],
+      )
+      expect(interaction.orientation).toEqual(base.sections)
+      expect(interaction.questions[0]).toMatchObject({ questionId: "authoring-path", custom: true,
+        options: [{ optionId: "browse-public-algorithms" }, { optionId: "recommend-starting-point" }] })
+    } finally { server.stop(true) }
+  })
   test("resolves only the bound task projection, never a workspace or sibling catalog", async () => {
     await using tmp = await tmpdir()
     const selected = path.join(tmp.path, ".stratcraft", "tasks", "selected")

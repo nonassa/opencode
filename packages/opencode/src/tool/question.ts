@@ -3,7 +3,7 @@ import * as Tool from "./tool"
 import { Question } from "../question"
 import DESCRIPTION from "./question.txt"
 import { InstanceState } from "@/effect/instance-state"
-import { loadStrategyAuthoringInteraction, resolveStrategyAuthoringDirectory } from "./strategy-authoring-catalog"
+import { loadStrategyAuthoringInteraction, loadStrategyProjectAuthoringInteraction, resolveStrategyAuthoringDirectory } from "./strategy-authoring-catalog"
 import { Config } from "@/config/config"
 
 export const Parameters = Schema.Struct({
@@ -49,14 +49,18 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
         Effect.gen(function* () {
           const settings = params.catalogQuestionIds !== undefined ? yield* config.get() : undefined
           const server = settings?.mcp?.stratforge
+          const remote = server && "type" in server && server.type === "remote" ? server : undefined
+          const taskId = remote?.headers?.["X-StratCraft-Authoring-Task-Id"]
           const interaction =
             params.catalogQuestionIds !== undefined
-              ? loadStrategyAuthoringInteraction(
+              ? remote && taskId === undefined
+                ? yield* Effect.promise(() => loadStrategyProjectAuthoringInteraction(
+                    remote.url, remote.headers, ctx.sessionID, params.catalogQuestionIds!,
+                  ))
+                : loadStrategyAuthoringInteraction(
                   resolveStrategyAuthoringDirectory(
                     (yield* InstanceState.context).directory,
-                    server && "type" in server && server.type === "remote"
-                      ? server.headers?.["X-StratCraft-Authoring-Task-Id"]
-                      : undefined,
+                    taskId,
                     settings?.instructions ?? [],
                   ),
                   params.catalogQuestionIds,

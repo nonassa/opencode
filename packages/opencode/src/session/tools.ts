@@ -437,9 +437,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const argumentsHash = createHash("sha256").update(JSON.stringify(args)).digest("hex")
             yield* ctx.ask({ permission: key, metadata: { input: args, requiresExactReview: reviewed },
               patterns: [reviewed ? opts.toolCallId : "*"], always: reviewed ? [] : ["*"] })
-            const dispatch = reviewed ? McpCatalog.convertTool(entry.def, entry.client, entry.timeout, {
+            const dispatch = McpCatalog.convertTool(entry.def, entry.client, entry.timeout, reviewed ? {
               stratcraftNativePermission: { permission: key, nativeSessionId: ctx.sessionID, callId: opts.toolCallId, argumentsHash },
-            }).execute! : execute
+            } : undefined, key.startsWith("stratforge_")
+              ? { nativeSessionId: ctx.sessionID } : undefined).execute!
             return yield* Effect.promise(() => dispatch(args, opts))
           }).pipe(
             Effect.withSpan("Tool.execute", {
