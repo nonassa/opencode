@@ -81,9 +81,23 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
             ))
             .join(", ")
 
+          const selected = questions.flatMap((q, i) => {
+            if (params.catalogQuestionIds === undefined || !("questionId" in q)) return []
+            return (answers[i] ?? []).flatMap((answer) => {
+              const option = q.options.find((option) => option.optionId === answer)
+              return option ? [{
+                questionId: q.questionId,
+                optionId: option.optionId,
+                label: option.label,
+                description: option.description,
+              }] : []
+            })
+          })
+
           return {
             title: `Asked ${questions.length} question${questions.length > 1 ? "s" : ""}`,
-            output: `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`,
+            output: `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
+              + (selected.length ? `\nSelected catalog options: ${JSON.stringify(selected)}` : ""),
             metadata: {
               answers,
               questions,

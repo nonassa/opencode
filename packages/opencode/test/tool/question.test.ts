@@ -3,7 +3,12 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect, Fiber, Queue } from "effect"
 import { QuestionTool } from "../../src/tool/question"
 import { Question } from "../../src/question"
-import { SessionID, MessageID } from "../../src/session/schema"
+import { SessionID, MessageID, PartID } from "../../src/session/schema"
+import { MessageV2 } from "../../src/session/message-v2"
+import type { Provider } from "../../src/provider/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Agent } from "../../src/agent/agent"
 import { Truncate } from "@/tool/truncate"
 import { testEffect } from "../lib/effect"
@@ -22,6 +27,18 @@ const ctx = {
   messages: [],
   metadata: () => Effect.void,
   ask: () => Effect.void,
+}
+
+const model: Provider.Model = {
+  id: ModelV2.ID.make("test-model"), providerID: ProviderV2.ID.make("test"),
+  api: { id: "test-model", url: "https://example.com", npm: "@ai-sdk/openai" },
+  name: "Test model", status: "active", release_date: "2026-01-01", options: {}, headers: {},
+  capabilities: {
+    temperature: true, reasoning: false, attachment: false, toolcall: true,
+    input: { text: true, audio: false, image: false, video: false, pdf: false },
+    output: { text: true, audio: false, image: false, video: false, pdf: false }, interleaved: false,
+  },
+  cost: { input: 0, output: 0, cache: { read: 0, write: 0 } }, limit: { context: 0, input: 0, output: 0 },
 }
 
 const it = testEffect(
@@ -61,6 +78,43 @@ describe("tool.question", () => {
         expect((yield* Fiber.join(fiber)).metadata.answers).toEqual([[answer]])
         expect(yield* question.list()).toEqual([])
       }
+      for (const answer of ["octobot-dca-trading-mode", "DCATradingMode", "My own DCA rules", undefined]) {
+        const fiber = yield* tool.execute({ catalogQuestionIds: ["public-algorithm-octobot"] }, ctx).pipe(Effect.forkScoped)
+        const item = yield* pending(question)
+        const answers = answer === undefined ? [] : [answer]
+        yield* question.reply({ requestID: item.id, answers: [answers] })
+        const result = yield* Fiber.join(fiber)
+        expect(result.metadata.answers).toEqual([answers])
+        if (answer === "octobot-dca-trading-mode") {
+          expect(result.output).toContain("https://example.com/pinned/dca.py")
+          expect(result.output).toContain('"optionId":"octobot-dca-trading-mode"')
+          expect(result.output).toContain('"label":"DCATradingMode"')
+          expect(result.output).toContain('"questionId":"public-algorithm-octobot"')
+          const history: SessionV1.WithParts[] = [{
+            info: {
+              id: ctx.messageID, sessionID: ctx.sessionID, role: "assistant", parentID: MessageID.make("msg_parent"),
+              time: { created: 0 }, modelID: model.id, providerID: model.providerID, mode: "", agent: ctx.agent,
+              path: { cwd: "/", root: "/" }, cost: 0,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            },
+            parts: [{
+              id: PartID.make("prt_question"), messageID: ctx.messageID, sessionID: ctx.sessionID,
+              type: "tool", tool: "question", callID: ctx.callID,
+              state: { status: "completed", input: { catalogQuestionIds: ["public-algorithm-octobot"] },
+                title: result.title, output: result.output, metadata: result.metadata, time: { start: 0, end: 1 } },
+            }],
+          }]
+          const messages = yield* MessageV2.toModelMessagesEffect(history, model)
+          const delivered = JSON.stringify(messages.find(message => message.role === "tool"))
+          expect(delivered).toContain("https://example.com/pinned/dca.py")
+          expect(delivered).not.toContain("https://example.com/pinned/grid.py")
+          expect(yield* MessageV2.toModelMessagesEffect(JSON.parse(JSON.stringify(history)), model)).toEqual(messages)
+        } else {
+          expect(result.output).not.toContain("https://example.com/pinned/dca.py")
+        }
+        expect(result.output).not.toContain("https://example.com/pinned/grid.py")
+        expect(yield* question.list()).toEqual([])
+      }
     }),
     { init: directory => Effect.gen(function* () {
       const projection = {
@@ -71,6 +125,10 @@ describe("tool.question", () => {
           selectionMode: "single", customAnswerPolicy: "allowed", options: [
             { optionId: "browse-public-algorithms", label: "Browse public algorithms", description: "Browse." },
             { optionId: "recommend-starting-point", label: "Recommend a starting point", description: "Recommend." },
+          ] }, { questionId: "public-algorithm-octobot", header: "OctoBot", question: "Which source?",
+          selectionMode: "single", customAnswerPolicy: "allowed", options: [
+            { optionId: "octobot-dca-trading-mode", label: "DCATradingMode", description: "Requires order-lifecycle adaptation; source: https://example.com/pinned/dca.py" },
+            { optionId: "octobot-grid-trading-mode", label: "GridTradingMode", description: "Grid source: https://example.com/pinned/grid.py" },
           ] }],
         effects: { createsStrategyRules: false, allowsExecutableAction: false },
       }
@@ -126,7 +184,7 @@ describe("tool.question", () => {
               {
                 optionId: "open-source-starting-point",
                 label: "Open-source starting point",
-                description: "Inspect a supported public algorithm.",
+                description: "Inspect a supported public algorithm; source: https://example.com/pinned/selected.py",
               },
             ],
             multiple: false,
@@ -139,13 +197,17 @@ describe("tool.question", () => {
           '"starting-direction (What should this strategy be about?)"="open-source-starting-point"',
         )
         expect(result.metadata.questions).toEqual(item.questions)
+        expect(result.output).toContain("https://example.com/pinned/selected.py")
+        expect(result.output).not.toContain("Begin with a public trend-following pattern.")
 
         const customFiber = yield* tool.execute({ catalogQuestionIds: ["starting-direction"] }, ctx).pipe(
           Effect.forkScoped,
         )
         const customItem = yield* pending(question)
         yield* question.reply({ requestID: customItem.id, answers: [["A custom direction"]] })
-        expect((yield* Fiber.join(customFiber)).output).toContain(
+        const customResult = yield* Fiber.join(customFiber)
+        expect(customResult.output).not.toContain("https://example.com/pinned/selected.py")
+        expect(customResult.output).toContain(
           '"starting-direction (What should this strategy be about?)"="A custom direction"',
         )
       }),
@@ -180,7 +242,7 @@ describe("tool.question", () => {
                   {
                     optionId: "open-source-starting-point",
                     label: "Open-source starting point",
-                    description: "Inspect a supported public algorithm.",
+                    description: "Inspect a supported public algorithm; source: https://example.com/pinned/selected.py",
                   },
                 ],
               },
@@ -242,6 +304,7 @@ describe("tool.question", () => {
 
       const result = yield* Fiber.join(fiber)
       expect(result.title).toBe("Asked 1 question")
+      expect(result.output).toBe('User has answered your questions: "What is your favorite color?"="Red". You can now continue with the user\'s answers in mind.')
     }),
   )
 
