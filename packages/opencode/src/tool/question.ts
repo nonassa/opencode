@@ -5,6 +5,7 @@ import DESCRIPTION from "./question.txt"
 import { InstanceState } from "@/effect/instance-state"
 import { loadStrategyAuthoringInteraction, loadStrategyProjectAuthoringInteraction, resolveStrategyAuthoringDirectory } from "./strategy-authoring-catalog"
 import { Config } from "@/config/config"
+import { Plugin } from "@/plugin"
 
 export const Parameters = Schema.Struct({
   questions: Schema.optional(
@@ -32,11 +33,12 @@ type Metadata = {
   questions: ReadonlyArray<Question.Info>
 }
 
-export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Service | Config.Service>(
+export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Service | Config.Service | Plugin.Service>(
   "question",
   Effect.gen(function* () {
     const question = yield* Question.Service
     const config = yield* Config.Service
+    const plugin = yield* Plugin.Service
 
     return {
       description: DESCRIPTION,
@@ -66,7 +68,25 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
                   params.catalogQuestionIds,
                 )
               : { orientation: undefined, questions: params.questions! }
-          const questions = interaction.questions
+          // The existing allowance hook consumes owner-resolved questions, never model-built catalog menus.
+          const hook = { args: { questions: interaction.questions } }
+          if (params.catalogQuestionIds !== undefined) {
+            for (const question of hook.args.questions) {
+              question.options.forEach(option => Object.freeze(option))
+              Object.freeze(question.options)
+              Object.freeze(question)
+            }
+            Object.freeze(hook.args.questions)
+            Object.freeze(hook.args)
+            Object.freeze(hook)
+          }
+          yield* plugin.trigger("tool.execute.before", {
+            tool: "question", sessionID: ctx.sessionID, messageID: ctx.messageID, callID: ctx.callID ?? "",
+          }, hook)
+          const questions = yield* Schema.decodeUnknownEffect(
+            Schema.Array(Question.Info).check(Schema.isMinLength(1)),
+          )(hook.args.questions)
+          yield* ctx.metadata({ input: params.catalogQuestionIds === undefined ? hook.args : params })
           const answers = yield* question.ask({
             sessionID: ctx.sessionID,
             orientation: interaction.orientation,

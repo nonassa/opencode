@@ -65,8 +65,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
     agent: input.agent.name,
     messages: input.messages,
-    metadata: (val) =>
-      input.processor.updateToolCall(options.toolCallId, (match) => {
+    metadata: (val) => {
+      if (val.input) Object.assign(args, val.input)
+      return input.processor.updateToolCall(options.toolCallId, (match) => {
         if (!["running", "pending"].includes(match.state.status)) return match
         return {
           ...match,
@@ -78,7 +79,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             time: { start: Date.now() },
           },
         }
-      }),
+      })
+    },
     ask: (req) =>
       permission
         .ask({
@@ -104,7 +106,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         return run.promise(
           Effect.gen(function* () {
             const hook = { args }
-            yield* plugin.trigger(
+            // Native questions resolve and validate their catalog before this hook.
+            if (item.id !== "question") yield* plugin.trigger(
               "tool.execute.before",
               {
                 tool: item.id,

@@ -57,6 +57,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
+import { createHash } from "node:crypto"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -908,6 +909,66 @@ it.instance("loop continues when finish is tool-calls", () =>
       expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
       expect(result.info.finish).toBe("stop")
     }
+  }),
+)
+
+it.instance("resolves catalog questions before one allowance hook and resumes the retained request", () =>
+  Effect.gen(function* () {
+    const { directory } = yield* TestInstance
+    const taskDirectory = path.join(directory, ".stratcraft/tasks/retained-task")
+    const projection = {
+      catalogVersion: "1.8.0", locale: "en_US", targetRuntime: "python-backtrader-v1", algorithmBrowsingEmptyState: null,
+      sections: [{ sectionId: "styles", label: "Styles", items: [{ itemId: "trend", label: "Trend", description: "Trend." }] }],
+      questions: [{ questionId: "common-strategy", question: "Which strategy?", header: "Strategy", selectionMode: "single",
+        customAnswerPolicy: "allowed", options: [{ optionId: "moving-average", label: "Moving average", description: "Crossovers." }] }],
+      effects: { createsStrategyRules: false, allowsExecutableAction: false },
+    }
+    const canonical = (value: unknown): string => {
+      if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+      if (value !== null && typeof value === "object") return `{${Object.entries(value)
+        .sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(",")}}`
+      return JSON.stringify(value)
+    }
+    yield* writeText(path.join(taskDirectory, "instructions/strategy-authoring-orientation.json"), JSON.stringify({
+      ...projection, projectionHash: createHash("sha256").update(canonical(projection)).digest("hex"),
+    }))
+    const { llm } = yield* useServerConfig(url => ({ ...providerCfg(url), instructions: [path.join(taskDirectory, "AGENTS.md")],
+      mcp: { stratforge: { type: "remote", url: "http://127.0.0.1:7789/mcp/authoring",
+        headers: { "X-StratCraft-Authoring-Task-Id": "retained-task" } } },
+    }))
+    const plugin = yield* Plugin.Service
+    const hooks = yield* plugin.list()
+    const calls: string[] = []
+    hooks.push({ "tool.execute.before": async (input, output) => {
+      if (input.tool !== "question") return
+      expect(output.args.questions).toHaveLength(1)
+      expect(output.args.questions[0].questionId).toBe("common-strategy")
+      calls.push(input.callID)
+    } })
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const question = yield* Question.Service
+    const session = yield* sessions.create({ permission: [{ permission: "*", pattern: "*", action: "allow" }] })
+    const original = yield* prompt.prompt({ sessionID: session.id, agent: "build", noReply: true,
+      parts: [{ type: "text", text: "Write a strategy and test it in this project" }],
+    })
+    yield* llm.tool("question", { catalogQuestionIds: ["common-strategy"] })
+    yield* llm.text("Continue the same coding request with the user's chosen strategy")
+    const fiber = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.forkChild)
+    const pending = yield* pollWithTimeout(question.list().pipe(Effect.map(items => items[0])), "catalog question did not appear")
+    expect(pending.sessionID).toBe(session.id)
+    expect(calls).toEqual([pending.tool!.callID])
+    const assistant = yield* MessageV2.get({ sessionID: session.id, messageID: pending.tool!.messageID })
+    expect(assistant.info.role === "assistant" && assistant.info.parentID).toBe(original.info.id)
+    yield* question.reply({ requestID: pending.id, answers: [["moving-average"]] })
+    yield* Fiber.join(fiber)
+    const history = yield* MessageV2.filterCompactedEffect(session.id)
+    const completed = history.flatMap(message => message.parts).find(part => part.type === "tool" && part.tool === "question")
+    expect(completed?.type === "tool" && completed.state.input).toEqual({ catalogQuestionIds: ["common-strategy"] })
+    expect(completed?.type === "tool" && completed.state.status).toBe("completed")
+    expect(JSON.stringify((yield* llm.hits).map(hit => hit.body.messages))).toContain("moving-average")
+    expect(history.filter(message => message.info.role === "user")).toHaveLength(1)
+    expect(yield* question.list()).toEqual([])
   }),
 )
 

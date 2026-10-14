@@ -17,6 +17,7 @@ import { createHash } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Config } from "@/config/config"
+import { Plugin } from "@/plugin"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-session"),
@@ -42,7 +43,7 @@ const model: Provider.Model = {
 }
 
 const it = testEffect(
-  LayerNode.compile(LayerNode.group([Question.node, EventV2Bridge.node, Truncate.node, Agent.node, Config.node])),
+  LayerNode.compile(LayerNode.group([Question.node, EventV2Bridge.node, Truncate.node, Agent.node, Config.node, Plugin.node])),
 )
 
 const pending = Effect.fn("QuestionToolTest.pending")(function* (question: Question.Interface) {
@@ -66,6 +67,22 @@ describe("tool.question", () => {
   it.instance("renders task-free project choices and consumes clicked and typed answers once", () =>
     Effect.gen(function* () {
       const question = yield* Question.Service
+      const plugin = yield* Plugin.Service
+      const counts: number[] = []
+      const hooks = yield* plugin.list()
+      hooks.push({ "tool.execute.before": async (input, output) => {
+        if (input.tool !== "question") return
+        expect(input).toMatchObject({ sessionID: ctx.sessionID, messageID: ctx.messageID, callID: ctx.callID })
+        expect(output.args.catalogQuestionIds).toBeUndefined()
+        expect(Reflect.set(output, "args", { questions: [] })).toBe(false)
+        expect(Reflect.set(output.args, "questions", [])).toBe(false)
+        expect(Reflect.set(output.args.questions[0], "questionId", "fabricated")).toBe(false)
+        expect(Reflect.set(output.args.questions[0], "question", "Invented wording")).toBe(false)
+        expect(Reflect.set(output.args.questions[0].options[0], "optionId", "fabricated")).toBe(false)
+        expect(() => output.args.questions.push(output.args.questions[0])).toThrow(TypeError)
+        expect(() => output.args.questions[0].options.reverse()).toThrow(TypeError)
+        counts.push(output.args.questions.length)
+      } })
       const toolInfo = yield* QuestionTool
       const tool = yield* toolInfo.init()
       for (const answer of ["browse-public-algorithms", "My own strategy idea"]) {
@@ -78,6 +95,7 @@ describe("tool.question", () => {
         expect((yield* Fiber.join(fiber)).metadata.answers).toEqual([[answer]])
         expect(yield* question.list()).toEqual([])
       }
+      expect(counts).toEqual([1, 1])
       for (const answer of ["octobot-dca-trading-mode", "DCATradingMode", "My own DCA rules", undefined]) {
         const fiber = yield* tool.execute({ catalogQuestionIds: ["public-algorithm-octobot"] }, ctx).pipe(Effect.forkScoped)
         const item = yield* pending(question)

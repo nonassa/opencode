@@ -9,10 +9,11 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Truncate } from "../../src/tool/truncate"
 import { Agent } from "../../src/agent/agent"
 import { Config } from "../../src/config/config"
+import { Plugin } from "../../src/plugin"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
-  LayerNode.compile(LayerNode.group([Question.node, EventV2Bridge.node, Truncate.node, Agent.node, Config.node])),
+  LayerNode.compile(LayerNode.group([Question.node, EventV2Bridge.node, Truncate.node, Agent.node, Config.node, Plugin.node])),
 )
 const ctx = {
   sessionID: SessionID.make("ses_empty_question"),
