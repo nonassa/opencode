@@ -4,8 +4,10 @@ import { InstanceState } from "@/effect/instance-state"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
+import path from "path"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Filesystem } from "@/util/filesystem"
 
 export const Event = PermissionV1.Event
 
@@ -69,9 +71,24 @@ const layer = Layer.effect(
       const { ruleset, ...request } = input
       const exactReview = request.metadata.requiresExactReview === true
       let needsAsk = exactReview
+      // File tools report worktree-relative paths; host-issued scopes may be absolute.
+      // Match both in the native tool's coordinate system, preserving rule order.
+      const worktree =
+        request.permission === "edit" || request.permission === "read"
+          ? (yield* InstanceState.context).worktree
+          : undefined
+      const effective = [...ruleset, ...(exactReview ? [] : approved)].map((rule) =>
+        worktree !== undefined && path.isAbsolute(rule.pattern) && Wildcard.match(request.permission, rule.permission)
+          ? { ...rule, pattern: path.relative(worktree, rule.pattern).replaceAll("\\", "/") }
+          : rule,
+      )
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, ...(exactReview ? [] : [approved]))
+        const target =
+          worktree === undefined
+            ? pattern
+            : path.relative(worktree, Filesystem.resolve(path.resolve(worktree, pattern))).replaceAll("\\", "/")
+        const rule = evaluate(request.permission, target, effective)
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({

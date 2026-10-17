@@ -1,7 +1,7 @@
 import { chmod, mkdir, readFile, stat as statFile, writeFile } from "fs/promises"
-import { createWriteStream, existsSync, statSync } from "fs"
+import { createWriteStream, existsSync, lstatSync, readlinkSync, statSync } from "fs"
 import { realpathSync } from "fs"
-import { dirname, isAbsolute, join, resolve as pathResolve, win32 } from "path"
+import { basename, dirname, isAbsolute, join, resolve as pathResolve, win32 } from "path"
 import { Readable } from "stream"
 import { pipeline } from "stream/promises"
 import { Glob } from "@opencode-ai/core/util/glob"
@@ -139,6 +139,11 @@ export function resolve(p: string): string {
   try {
     return normalizePath(realpathSync(resolved))
   } catch (e) {
+    if (isEnoent(e) && lstatSync(resolved, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return resolve(pathResolve(dirname(resolved), readlinkSync(resolved)))
+    }
+    // A new file can still have a symlinked parent. Resolve its existing ancestor.
+    if (isEnoent(e) && dirname(resolved) !== resolved) return join(resolve(dirname(resolved)), basename(resolved))
     if (isEnoent(e)) return normalizePath(resolved)
     throw e
   }
