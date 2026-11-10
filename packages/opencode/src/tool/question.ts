@@ -6,6 +6,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { loadStrategyAuthoringInteraction, loadStrategyProjectAuthoringInteraction, resolveStrategyAuthoringDirectory } from "./strategy-authoring-catalog"
 import { Config } from "@/config/config"
 import { Plugin } from "@/plugin"
+import type { CatalogQuestionBeforeOutput, QuestionRequestAssociation } from "@opencode-ai/plugin"
 
 export const Parameters = Schema.Struct({
   questions: Schema.optional(
@@ -28,8 +29,14 @@ export const Parameters = Schema.Struct({
   }),
 )
 
+const RequestAssociation = Schema.Union([
+  Schema.Struct({ purpose: Schema.Literal("request"), sourceId: Schema.String.check(Schema.isMinLength(1)) }),
+  Schema.Struct({ purpose: Schema.Literal("scope-selection"), sourceId: Schema.Null }),
+])
+
 type Metadata = {
-  answers: ReadonlyArray<Question.Answer>
+  questionRequestAssociation?: QuestionRequestAssociation
+  answers?: ReadonlyArray<Question.Answer>
   questions: ReadonlyArray<Question.Info>
 }
 
@@ -69,7 +76,7 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
                 )
               : { orientation: undefined, questions: params.questions! }
           // The existing allowance hook consumes owner-resolved questions, never model-built catalog menus.
-          const hook = { args: { questions: interaction.questions } }
+          const hook: CatalogQuestionBeforeOutput = { args: { questions: interaction.questions }, questionContext: {} }
           if (params.catalogQuestionIds !== undefined) {
             for (const question of hook.args.questions) {
               question.options.forEach(option => Object.freeze(option))
@@ -86,7 +93,11 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
           const questions = yield* Schema.decodeUnknownEffect(
             Schema.Array(Question.Info).check(Schema.isMinLength(1)),
           )(hook.args.questions)
-          yield* ctx.metadata({ input: params.catalogQuestionIds === undefined ? hook.args : params })
+          const association = hook.questionContext.requestAssociation === undefined
+            ? undefined
+            : Object.freeze({ ...(yield* Schema.decodeUnknownEffect(RequestAssociation)(hook.questionContext.requestAssociation)) })
+          const metadata = { questions, ...(association ? { questionRequestAssociation: association } : {}) }
+          yield* ctx.metadata({ input: params.catalogQuestionIds === undefined ? hook.args : params, metadata })
           const answers = yield* question.ask({
             sessionID: ctx.sessionID,
             orientation: interaction.orientation,
@@ -118,10 +129,7 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
             title: `Asked ${questions.length} question${questions.length > 1 ? "s" : ""}`,
             output: `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
               + (selected.length ? `\nSelected catalog options: ${JSON.stringify(selected)}` : ""),
-            metadata: {
-              answers,
-              questions,
-            },
+            metadata: { ...metadata, answers },
           }
         }).pipe(Effect.orDie),
     }

@@ -10,12 +10,31 @@ import type {
   Part,
   Config as SDKConfig,
 } from "@opencode-ai/sdk"
-import type { Provider as ProviderV2, Model as ModelV2, Auth } from "@opencode-ai/sdk/v2"
+import type { Provider as ProviderV2, Model as ModelV2, Auth, QuestionInfo } from "@opencode-ai/sdk/v2"
 
 import type { BunShell } from "./shell.js"
 import { type ToolDefinition } from "./tool.js"
 
 export * from "./tool.js"
+
+/** Native-created question context is separate from protected catalog arguments. */
+export type QuestionRequestAssociation =
+  | Readonly<{ purpose: "request"; sourceId: string }>
+  | Readonly<{ purpose: "scope-selection"; sourceId: null }>
+
+export type QuestionExecutionContext = {
+  requestAssociation?: QuestionRequestAssociation
+}
+
+/** Catalog contents are readonly; only the native-created context accepts association. */
+export type CatalogQuestionBeforeOutput = {
+  readonly args: {
+    readonly questions: readonly (Readonly<Omit<QuestionInfo, "options">> & {
+      readonly options: readonly Readonly<QuestionInfo["options"][number]>[]
+    })[]
+  }
+  readonly questionContext: QuestionExecutionContext
+}
 
 export type ProviderContext = {
   source: "env" | "config" | "custom" | "api"
@@ -268,9 +287,10 @@ export interface Hooks {
     input: { command: string; sessionID: string; arguments: string; messageID: string },
     output: { status: "completed" | "failed" },
   ) => Promise<void>
+  /** Catalog question output follows CatalogQuestionBeforeOutput; other tools retain mutable args. */
   "tool.execute.before"?: (
     input: { tool: string; sessionID: string; messageID?: string; callID: string },
-    output: { args: any },
+    output: { args: any; readonly questionContext?: QuestionExecutionContext },
   ) => Promise<void>
   "shell.env"?: (
     input: { cwd: string; sessionID?: string; callID?: string },

@@ -81,18 +81,26 @@ describe("tool.question", () => {
         expect(Reflect.set(output.args.questions[0].options[0], "optionId", "fabricated")).toBe(false)
         expect(() => output.args.questions.push(output.args.questions[0])).toThrow(TypeError)
         expect(() => output.args.questions[0].options.reverse()).toThrow(TypeError)
+        output.questionContext!.requestAssociation = { purpose: "request", sourceId: "original-request" }
         counts.push(output.args.questions.length)
       } })
       const toolInfo = yield* QuestionTool
       const tool = yield* toolInfo.init()
       for (const answer of ["browse-public-algorithms", "My own strategy idea"]) {
-        const fiber = yield* tool.execute({ catalogQuestionIds: ["authoring-path"] }, ctx).pipe(Effect.forkScoped)
+        let saved: Record<string, unknown> = {}
+        const fiber = yield* tool.execute({ catalogQuestionIds: ["authoring-path"] }, { ...ctx,
+          metadata: value => Effect.sync(() => { saved = value.metadata ?? {} }),
+        }).pipe(Effect.forkScoped)
         const item = yield* pending(question)
+        expect(saved.questionRequestAssociation).toEqual({ purpose: "request", sourceId: "original-request" })
+        expect(saved.questions).toEqual(item.questions)
         expect(item.orientation?.[0]).toMatchObject({ sectionId: "examples", label: "Examples" })
         expect(item.questions[0]).toMatchObject({ questionId: "authoring-path", custom: true, multiple: false,
           options: [{ optionId: "browse-public-algorithms" }, { optionId: "recommend-starting-point" }] })
         yield* question.reply({ requestID: item.id, answers: [[answer]] })
-        expect((yield* Fiber.join(fiber)).metadata.answers).toEqual([[answer]])
+        const result = yield* Fiber.join(fiber)
+        expect(result.metadata.answers).toEqual([[answer]])
+        expect(result.metadata.questionRequestAssociation).toEqual({ purpose: "request", sourceId: "original-request" })
         expect(yield* question.list()).toEqual([])
       }
       expect(counts).toEqual([1, 1])
