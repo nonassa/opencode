@@ -1,6 +1,6 @@
 import { Effect, Stream } from "effect"
 import os from "os"
-import { createWriteStream } from "node:fs"
+import { createWriteStream, existsSync, realpathSync } from "node:fs"
 import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -21,6 +21,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { Permission } from "@/permission"
 
 export { Parameters } from "./shell/prompt"
 
@@ -260,7 +261,12 @@ const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boole
   return tree
 })
 
-const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan, input: { command: string }) {
+const ask = Effect.fn("ShellTool.ask")(function* (
+  ctx: Tool.Context,
+  scan: Scan,
+  input: { command: string },
+  permission: string,
+) {
   if (scan.dirs.size > 0) {
     const directories = Array.from(scan.dirs)
     const globs = directories.map((dir) => {
@@ -281,7 +287,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan,
 
   if (scan.patterns.size === 0) return
   yield* ctx.ask({
-    permission: ShellID.ToolID,
+    permission,
     patterns: Array.from(scan.patterns),
     always: Array.from(scan.always),
     metadata: {
@@ -308,6 +314,59 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
     detached: process.platform !== "win32",
   })
 }
+// The managed test variant keeps the native shell runner and output handling.
+export const LOCAL_TEST_TOOL_ID = "local_test"
+function localTestCommand(command: string, cwd: string, workspace: string, env: NodeJS.ProcessEnv) {
+  const system = ["/usr", "/lib", "/lib64", "/bin"]
+  const mounts = system.filter(existsSync).flatMap((entry) => ["--ro-bind", entry, entry])
+  const runtime = (
+    env.STRATCRAFT_AUTHORING_PYTHON_BIN ? [env.STRATCRAFT_AUTHORING_PYTHON_BIN, env.VIRTUAL_ENV] : []
+  ).filter((entry): entry is string => !!entry && path.isAbsolute(entry) && entry !== "/")
+  for (const entry of runtime) {
+    const real = realpathSync(entry)
+    mounts.push("--ro-bind", real, entry)
+  }
+  return ChildProcess.make(
+    "/usr/bin/bwrap",
+    [
+      "--unshare-all",
+      "--die-with-parent",
+      "--cap-drop",
+      "ALL",
+      "--proc",
+      "/proc",
+      "--dev",
+      "/dev",
+      "--tmpfs",
+      "/tmp",
+      ...mounts,
+      "--ro-bind",
+      workspace,
+      workspace,
+      "--chdir",
+      cwd,
+      "--clearenv",
+      "--setenv",
+      "HOME",
+      "/tmp",
+      "--setenv",
+      "TMPDIR",
+      "/tmp",
+      "--setenv",
+      "PATH",
+      [env.STRATCRAFT_AUTHORING_PYTHON_BIN, "/usr/bin", "/bin"].filter(Boolean).join(":"),
+      "--setenv",
+      "PYTHONDONTWRITEBYTECODE",
+      "1",
+      "--",
+      "/bin/sh",
+      "-c",
+      command,
+    ],
+    { env: {}, stdin: "ignore", detached: true },
+  )
+}
+
 const parser = lazy(async () => {
   const { Parser } = await import("web-tree-sitter")
   const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
@@ -335,8 +394,7 @@ const parser = lazy(async () => {
   return { bash, ps }
 })
 
-export const ShellTool = Tool.define(
-  ShellID.ToolID,
+const shellDefinition = (id: string) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
     const spawner = yield* ChildProcessSpawner
@@ -432,6 +490,7 @@ export const ShellTool = Tool.define(
         cwd: string
         env: NodeJS.ProcessEnv
         timeout: number
+        testWorkspace?: string
       },
       ctx: Tool.Context,
     ) {
@@ -481,7 +540,11 @@ export const ShellTool = Tool.define(
       const code: number | null = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
-          const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+          const handle = yield* spawner.spawn(
+            input.testWorkspace
+              ? localTestCommand(input.command, input.cwd, input.testWorkspace, input.env)
+              : cmd(input.shell, input.command, input.cwd, input.env),
+          )
 
           yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
@@ -565,6 +628,7 @@ export const ShellTool = Tool.define(
         )
       }
       if (aborted) meta.push("User aborted the command")
+      if (input.testWorkspace && code !== null) meta.push(`Command exited with code ${code}`)
       const raw = list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true
@@ -597,21 +661,37 @@ export const ShellTool = Tool.define(
     return () =>
       Effect.gen(function* () {
         const cfg = yield* config.get()
-        const shell = Shell.acceptable(cfg.shell)
+        const managed = process.env.OPENCODE_CONFIG_CONTENT_ONLY === "1" && !!cfg.mcp?.stratforge
+        const sandbox = process.platform === "linux" && managed
+        const localTestAllowed =
+          sandbox &&
+          Permission.evaluate(LOCAL_TEST_TOOL_ID, "*", Permission.fromConfig(cfg.permission ?? {})).action === "allow"
+        const shell = sandbox ? "/bin/sh" : Shell.acceptable(cfg.shell)
         const name = Shell.name(shell)
         const limits = yield* trunc.limits()
         const prompt = ShellPrompt.render(name, process.platform, limits, defaultTimeoutMs)
         yield* Effect.logInfo("shell tool using shell", { shell })
 
         return {
-          description: prompt.description,
+          description:
+            id === LOCAL_TEST_TOOL_ID
+              ? "Run local development checks in the read-only project workspace. Use /tmp for compiler outputs and other scratch files."
+              : prompt.description,
           parameters: prompt.parameters,
           execute: (params: Parameters, ctx: Tool.Context) =>
             Effect.gen(function* () {
+              if (id === LOCAL_TEST_TOOL_ID && !localTestAllowed)
+                throw new Error("The managed local test tool is outside the configured execution scope")
               const instanceCtx = yield* InstanceState.context
               const cwd = params.workdir
                 ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
                 : instanceCtx.directory
+              if (sandbox) {
+                const relative = path.relative(realpathSync(instanceCtx.directory), realpathSync(cwd))
+                if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+                  throw new Error("The local test working directory is outside the project workspace")
+                }
+              }
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
@@ -624,7 +704,7 @@ export const ShellTool = Tool.define(
                   )
                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
                   if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
-                  yield* ask(ctx, scan, params)
+                  yield* ask(ctx, scan, params, id)
                 }),
               )
 
@@ -635,11 +715,14 @@ export const ShellTool = Tool.define(
                   cwd,
                   env: yield* shellEnv(ctx, cwd),
                   timeout,
+                  ...(sandbox ? { testWorkspace: instanceCtx.directory } : {}),
                 },
                 ctx,
               )
             }),
         }
       })
-  }),
-)
+  })
+
+export const ShellTool = Tool.define(ShellID.ToolID, shellDefinition(ShellID.ToolID))
+export const LocalTestTool = Tool.define(LOCAL_TEST_TOOL_ID, shellDefinition(LOCAL_TEST_TOOL_ID))

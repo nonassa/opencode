@@ -93,6 +93,11 @@ for (const git of [false, true]) {
             "value = 3\n",
           )
           yield* writer.execute({ filePath: "tests/test_strategy.py", content: "assert True\n" }, ctx)
+          yield* patcher.execute(
+            { patchText: "*** Begin Patch\n*** Delete File: tests/test_strategy.py\n*** End Patch" },
+            ctx,
+          )
+          expect(existsSync(path.join(directory, "tests/test_strategy.py"))).toBe(false)
           expect((yield* (yield* Permission.Service).list()).length).toBe(0)
         }),
       { git },
@@ -153,6 +158,30 @@ it.instance("symlinks cannot bypass the project or protected-file scope, includi
     expect(existsSync(path.join(outside, "new/nested.py"))).toBe(false)
     expect(existsSync(path.join(outside, "missing.py"))).toBe(false)
     expect(existsSync(path.join(directory, ".stratcraft/owner.json"))).toBe(false)
+  }),
+)
+
+it.instance("patch cannot delete protected files or files outside the workspace", () =>
+  Effect.gen(function* () {
+    const { directory } = yield* TestInstance
+    const outside = path.join(path.dirname(directory), path.basename(directory) + "-outside.py")
+    yield* Effect.acquireRelease(
+      Effect.promise(() => fs.writeFile(outside, "outside\n")),
+      () => Effect.promise(() => fs.rm(outside)),
+    )
+    yield* Effect.promise(async () => {
+      await fs.mkdir(path.join(directory, ".stratcraft"))
+      await fs.writeFile(path.join(directory, ".stratcraft/owner.py"), "protected\n")
+    })
+    const patcher = yield* (yield* ApplyPatchTool).init()
+    const ctx = yield* context(directory)
+    for (const file of [".stratcraft/owner.py", outside]) {
+      const result = yield* patcher
+        .execute({ patchText: `*** Begin Patch\n*** Delete File: ${file}\n*** End Patch` }, ctx)
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      expect(existsSync(path.resolve(directory, file))).toBe(true)
+    }
   }),
 )
 

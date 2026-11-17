@@ -57,6 +57,21 @@ const replacements = [
 ] as const
 
 const it = testEffect(LayerNode.compile(root, replacements))
+const withManagedAuthoring = testEffect(
+  LayerNode.compile(root, [
+    [
+      Config.node,
+      TestConfig.layer({
+        get: () =>
+          Effect.succeed({
+            mcp: { stratforge: { type: "remote", url: "http://127.0.0.1/mcp/authoring" } },
+            permission: { bash: "deny", local_test: "allow" },
+          }),
+      }),
+    ],
+    [RuntimeFlags.node, RuntimeFlags.layer()],
+  ]),
+)
 const withCodeMode = testEffect(
   LayerNode.compile(root, [
     [Config.node, configLayer],
@@ -100,6 +115,68 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
+  withManagedAuthoring.instance("exposes patch deletion alongside write and edit for managed DeepSeek authoring", () =>
+    Effect.gen(function* () {
+      const key = "OPENCODE_CONFIG_CONTENT_ONLY"
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const previous = process.env[key]
+          process.env[key] = "1"
+          return previous
+        }),
+        (previous) =>
+          Effect.sync(() => {
+            if (previous === undefined) delete process.env[key]
+            else process.env[key] = previous
+          }),
+      )
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.opencode,
+        modelID: ModelV2.ID.make("deepseek-v4-flash"),
+        agent: yield* agents.defaultInfo(),
+      })
+      expect(tools.map((tool) => tool.id)).toEqual(expect.arrayContaining(["apply_patch", "edit", "write"]))
+      if (process.platform !== "linux" || !Bun.which("bwrap")) return
+      const local = tools.find((tool) => tool.id === "local_test")!
+      expect(local).toBeDefined()
+      const { directory } = yield* TestInstance
+      const outside = path.join(path.dirname(directory), path.basename(directory) + "-private")
+      yield* Effect.acquireRelease(
+        Effect.promise(() => fs.writeFile(outside, "private")),
+        () => Effect.promise(() => fs.unlink(outside)),
+      )
+      const test = path.join(directory, "test_strategy.py")
+      yield* Effect.promise(() => fs.writeFile(test, "assert 1 == 2\n"))
+      const ctx = {
+        sessionID: SessionID.make("ses_local_test"),
+        messageID: MessageID.make("msg_local_test"),
+        callID: "local-test",
+        agent: "build",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const check = { command: "python3 test_strategy.py", description: "Run strategy test" }
+      const failed = yield* local.execute(check, ctx)
+      expect(failed.metadata.exit).toBe(1)
+      expect(failed.output).toContain("AssertionError")
+      yield* Effect.promise(() => fs.writeFile(test, "assert 1 == 1\n"))
+      const passed = yield* local.execute(check, ctx)
+      expect(passed.metadata.exit).toBe(0)
+      const isolated = yield* local.execute(
+        {
+          command: `python3 -c 'import os; assert not os.path.exists(${JSON.stringify(outside)}); assert not os.access("test_strategy.py", os.W_OK); assert "STRATCRAFT_OPENCODE_AUTHORING_MCP_LEASE_TOKEN" not in os.environ'`,
+          description: "Check workspace isolation",
+        },
+        ctx,
+      )
+      expect(isolated.metadata.exit).toBe(0)
+    }),
+  )
+
   it.instance("does not expose task_status", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

@@ -4,7 +4,7 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
-import { ShellTool } from "./shell"
+import { LOCAL_TEST_TOOL_ID, LocalTestTool, ShellTool } from "./shell"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
@@ -108,6 +108,7 @@ const layer = Layer.effect(
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
+    const localTest = yield* LocalTestTool
     const globtool = yield* GlobTool
     const writetool = yield* WriteTool
     const edit = yield* EditTool
@@ -209,6 +210,7 @@ const layer = Layer.effect(
         const tool = yield* Effect.all({
           invalid: Tool.init(invalid),
           shell: Tool.init(shell),
+          localTest: Tool.init(localTest),
           read: Tool.init(read),
           glob: Tool.init(globtool),
           grep: Tool.init(greptool),
@@ -232,6 +234,7 @@ const layer = Layer.effect(
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
             tool.shell,
+            tool.localTest,
             tool.read,
             tool.glob,
             tool.grep,
@@ -289,14 +292,25 @@ const layer = Layer.effect(
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
+      const cfg = yield* config.get()
+      const managedAuthoring = process.env.OPENCODE_CONFIG_CONTENT_ONLY === "1" && !!cfg.mcp?.stratforge
+      const localTestAllowed =
+        Permission.evaluate(LOCAL_TEST_TOOL_ID, "*", Permission.fromConfig(cfg.permission ?? {})).action === "allow"
       const filtered = (yield* all()).filter((tool) => {
+        if (tool.id === LOCAL_TEST_TOOL_ID)
+          return (
+            managedAuthoring &&
+            localTestAllowed &&
+            process.platform === "linux" &&
+            Permission.evaluate(LOCAL_TEST_TOOL_ID, "*", input.agent.permission).action === "allow"
+          )
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }
 
         const usePatch =
           input.modelID.includes("gpt-") && !input.modelID.includes("oss") && !input.modelID.includes("gpt-4")
-        if (tool.id === ApplyPatchTool.id) return usePatch
+        if (tool.id === ApplyPatchTool.id) return usePatch || managedAuthoring
         if (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch
 
         return true
