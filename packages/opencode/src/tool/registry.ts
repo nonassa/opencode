@@ -4,7 +4,8 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
-import { LOCAL_TEST_TOOL_ID, LocalTestTool, ShellTool } from "./shell"
+import { LocalTestTool, ShellTool } from "./shell"
+import { LocalTest, LOCAL_TEST_TOOL_ID } from "./shell/local-test"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
@@ -301,7 +302,7 @@ const layer = Layer.effect(
           return (
             managedAuthoring &&
             localTestAllowed &&
-            process.platform === "linux" &&
+            LocalTest.supported &&
             Permission.evaluate(LOCAL_TEST_TOOL_ID, "*", input.agent.permission).action === "allow"
           )
         if (tool.id === WebSearchTool.id) {

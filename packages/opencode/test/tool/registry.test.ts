@@ -138,9 +138,11 @@ describe("tool.registry", () => {
         agent: yield* agents.defaultInfo(),
       })
       expect(tools.map((tool) => tool.id)).toEqual(expect.arrayContaining(["apply_patch", "edit", "write"]))
-      if (process.platform !== "linux" || !Bun.which("bwrap")) return
+      if (!["linux", "darwin", "win32"].includes(process.platform)) return
       const local = tools.find((tool) => tool.id === "local_test")!
       expect(local).toBeDefined()
+      const managedPython = process.env.STRATCRAFT_AUTHORING_PYTHON_BIN && process.env.VIRTUAL_ENV
+      if (process.platform === "linux" ? !Bun.which("bwrap") : !managedPython) return
       const { directory } = yield* TestInstance
       const outside = path.join(path.dirname(directory), path.basename(directory) + "-private")
       yield* Effect.acquireRelease(
@@ -148,7 +150,9 @@ describe("tool.registry", () => {
         () => Effect.promise(() => fs.unlink(outside)),
       )
       const test = path.join(directory, "test_strategy.py")
-      yield* Effect.promise(() => fs.writeFile(test, "assert 1 == 2\n"))
+      const testSource = (expected: number) =>
+        `def test_result():\n    assert 1 == ${expected}\nif __name__ == "__main__":\n    test_result()\n`
+      yield* Effect.promise(() => fs.writeFile(test, testSource(2)))
       const ctx = {
         sessionID: SessionID.make("ses_local_test"),
         messageID: MessageID.make("msg_local_test"),
@@ -159,18 +163,45 @@ describe("tool.registry", () => {
         metadata: () => Effect.void,
         ask: () => Effect.void,
       }
-      const check = { command: "python3 test_strategy.py", description: "Run strategy test" }
+      const focusedPytest = managedPython ? " -B -m pytest -p no:cacheprovider -q" : ""
+      const check = { command: `python3${focusedPytest} test_strategy.py`, description: "Run strategy test" }
       const failed = yield* local.execute(check, ctx)
       expect(failed.metadata.exit).toBe(1)
       expect(failed.output).toContain("AssertionError")
-      yield* Effect.promise(() => fs.writeFile(test, "assert 1 == 1\n"))
+      yield* Effect.promise(() => fs.writeFile(test, testSource(1)))
       const passed = yield* local.execute(check, ctx)
       expect(passed.metadata.exit).toBe(0)
+      const isolation = path.join(directory, "check_isolation.py")
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          isolation,
+          `
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+try:
+    Path(${JSON.stringify(outside)}).read_text()
+except OSError:
+    pass
+else:
+    raise AssertionError("Read outside the workspace")
+
+try:
+    Path("test_strategy.py").write_text("outside scratch")
+except OSError:
+    pass
+else:
+    raise AssertionError("Wrote to the workspace")
+
+assert "STRATCRAFT_OPENCODE_AUTHORING_MCP_LEASE_TOKEN" not in os.environ
+with TemporaryDirectory() as scratch:
+    (Path(scratch) / "check.txt").write_text("temporary")
+`,
+        ),
+      )
       const isolated = yield* local.execute(
-        {
-          command: `python3 -c 'import os; assert not os.path.exists(${JSON.stringify(outside)}); assert not os.access("test_strategy.py", os.W_OK); assert "STRATCRAFT_OPENCODE_AUTHORING_MCP_LEASE_TOKEN" not in os.environ'`,
-          description: "Check workspace isolation",
-        },
+        { command: "python3 check_isolation.py", description: "Check workspace isolation" },
         ctx,
       )
       expect(isolated.metadata.exit).toBe(0)

@@ -1,6 +1,6 @@
 import { Effect, Stream } from "effect"
 import os from "os"
-import { createWriteStream, existsSync, realpathSync } from "node:fs"
+import { createWriteStream, realpathSync } from "node:fs"
 import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -22,6 +22,7 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { Permission } from "@/permission"
+import { LocalTest, LOCAL_TEST_TOOL_ID } from "./shell/local-test"
 
 export { Parameters } from "./shell/prompt"
 
@@ -314,59 +315,6 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
     detached: process.platform !== "win32",
   })
 }
-// The managed test variant keeps the native shell runner and output handling.
-export const LOCAL_TEST_TOOL_ID = "local_test"
-function localTestCommand(command: string, cwd: string, workspace: string, env: NodeJS.ProcessEnv) {
-  const system = ["/usr", "/lib", "/lib64", "/bin"]
-  const mounts = system.filter(existsSync).flatMap((entry) => ["--ro-bind", entry, entry])
-  const runtime = (
-    env.STRATCRAFT_AUTHORING_PYTHON_BIN ? [env.STRATCRAFT_AUTHORING_PYTHON_BIN, env.VIRTUAL_ENV] : []
-  ).filter((entry): entry is string => !!entry && path.isAbsolute(entry) && entry !== "/")
-  for (const entry of runtime) {
-    const real = realpathSync(entry)
-    mounts.push("--ro-bind", real, entry)
-  }
-  return ChildProcess.make(
-    "/usr/bin/bwrap",
-    [
-      "--unshare-all",
-      "--die-with-parent",
-      "--cap-drop",
-      "ALL",
-      "--proc",
-      "/proc",
-      "--dev",
-      "/dev",
-      "--tmpfs",
-      "/tmp",
-      ...mounts,
-      "--ro-bind",
-      workspace,
-      workspace,
-      "--chdir",
-      cwd,
-      "--clearenv",
-      "--setenv",
-      "HOME",
-      "/tmp",
-      "--setenv",
-      "TMPDIR",
-      "/tmp",
-      "--setenv",
-      "PATH",
-      [env.STRATCRAFT_AUTHORING_PYTHON_BIN, "/usr/bin", "/bin"].filter(Boolean).join(":"),
-      "--setenv",
-      "PYTHONDONTWRITEBYTECODE",
-      "1",
-      "--",
-      "/bin/sh",
-      "-c",
-      command,
-    ],
-    { env: {}, stdin: "ignore", detached: true },
-  )
-}
-
 const parser = lazy(async () => {
   const { Parser } = await import("web-tree-sitter")
   const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
@@ -540,11 +488,10 @@ const shellDefinition = (id: string) =>
       const code: number | null = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
-          const handle = yield* spawner.spawn(
-            input.testWorkspace
-              ? localTestCommand(input.command, input.cwd, input.testWorkspace, input.env)
-              : cmd(input.shell, input.command, input.cwd, input.env),
-          )
+          const command = input.testWorkspace
+            ? yield* LocalTest.command(input.command, input.cwd, input.testWorkspace, input.env)
+            : cmd(input.shell, input.command, input.cwd, input.env)
+          const handle = yield* spawner.spawn(command)
 
           yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
@@ -664,9 +611,12 @@ const shellDefinition = (id: string) =>
         const managed = process.env.OPENCODE_CONFIG_CONTENT_ONLY === "1" && !!cfg.mcp?.stratforge
         const sandbox = process.platform === "linux" && managed
         const localTestAllowed =
-          sandbox &&
+          managed &&
+          LocalTest.supported &&
           Permission.evaluate(LOCAL_TEST_TOOL_ID, "*", Permission.fromConfig(cfg.permission ?? {})).action === "allow"
-        const shell = sandbox ? "/bin/sh" : Shell.acceptable(cfg.shell)
+        const isolated = sandbox || (id === LOCAL_TEST_TOOL_ID && localTestAllowed)
+        const windowsTest = id === LOCAL_TEST_TOOL_ID && process.platform === "win32"
+        const shell = isolated && !windowsTest ? "/bin/sh" : Shell.acceptable(cfg.shell)
         const name = Shell.name(shell)
         const limits = yield* trunc.limits()
         const prompt = ShellPrompt.render(name, process.platform, limits, defaultTimeoutMs)
@@ -675,18 +625,22 @@ const shellDefinition = (id: string) =>
         return {
           description:
             id === LOCAL_TEST_TOOL_ID
-              ? "Run local development checks in the read-only project workspace. Use /tmp for compiler outputs and other scratch files."
+              ? windowsTest
+                ? "Run managed Python in the read-only project workspace. Pass one python command with arguments and use relative project paths. Use double quotes for arguments containing spaces."
+                : "Run local development checks in the read-only project workspace. Use the temporary directory for scratch files."
               : prompt.description,
-          parameters: prompt.parameters,
+          parameters: windowsTest ? LocalTest.windowsParameters : prompt.parameters,
           execute: (params: Parameters, ctx: Tool.Context) =>
             Effect.gen(function* () {
               if (id === LOCAL_TEST_TOOL_ID && !localTestAllowed)
                 throw new Error("The managed local test tool is outside the configured execution scope")
               const instanceCtx = yield* InstanceState.context
               const cwd = params.workdir
-                ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
+                ? windowsTest
+                  ? path.resolve(instanceCtx.directory, params.workdir)
+                  : yield* resolvePath(params.workdir, instanceCtx.directory, shell)
                 : instanceCtx.directory
-              if (sandbox) {
+              if (isolated) {
                 const relative = path.relative(realpathSync(instanceCtx.directory), realpathSync(cwd))
                 if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
                   throw new Error("The local test working directory is outside the project workspace")
@@ -697,16 +651,19 @@ const shellDefinition = (id: string) =>
               }
               const timeout = params.timeout ?? defaultTimeoutMs
               const ps = Shell.ps(shell)
-              yield* Effect.scoped(
-                Effect.gen(function* () {
-                  const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
-                    Effect.sync(() => tree.delete()),
-                  )
-                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
-                  if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
-                  yield* ask(ctx, scan, params, id)
-                }),
-              )
+              if (windowsTest) {
+                yield* ask(ctx, { dirs: new Set(), patterns: new Set([params.command]), always: new Set() }, params, id)
+              } else
+                yield* Effect.scoped(
+                  Effect.gen(function* () {
+                    const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
+                      Effect.sync(() => tree.delete()),
+                    )
+                    const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
+                    if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
+                    yield* ask(ctx, scan, params, id)
+                  }),
+                )
 
               return yield* run(
                 {
@@ -715,7 +672,7 @@ const shellDefinition = (id: string) =>
                   cwd,
                   env: yield* shellEnv(ctx, cwd),
                   timeout,
-                  ...(sandbox ? { testWorkspace: instanceCtx.directory } : {}),
+                  ...(isolated ? { testWorkspace: instanceCtx.directory } : {}),
                 },
                 ctx,
               )

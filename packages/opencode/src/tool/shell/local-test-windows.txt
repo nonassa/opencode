@@ -1,0 +1,186 @@
+"""Run one Python check in an AppContainer and a kill-on-close job."""
+import ctypes as c
+from ctypes import wintypes as w
+from contextlib import ExitStack
+import msvcrt
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import uuid
+
+kernel = c.WinDLL("kernel32", use_last_error=True)
+userenv = c.WinDLL("userenv", use_last_error=True)
+advapi = c.WinDLL("advapi32", use_last_error=True)
+shell = c.WinDLL("shell32", use_last_error=True)
+
+
+def api(library, name, result, *arguments):
+    function = getattr(library, name)
+    function.restype = result
+    function.argtypes = arguments
+    return function
+
+
+def checked(result):
+    if not result:
+        raise c.WinError(c.get_last_error())
+    return result
+
+
+class StartupInfo(c.Structure):
+    _fields_ = [
+        ("size", w.DWORD), ("reserved", w.LPWSTR), ("desktop", w.LPWSTR), ("title", w.LPWSTR),
+        ("position_and_size", w.DWORD * 8), ("show", w.WORD), ("reserved_size", w.WORD),
+        ("reserved_data", w.LPVOID), ("stdin", w.HANDLE), ("stdout", w.HANDLE), ("stderr", w.HANDLE),
+    ]
+
+
+class StartupInfoEx(c.Structure):
+    _fields_ = [("startup", StartupInfo), ("attributes", w.LPVOID)]
+
+
+class ProcessInfo(c.Structure):
+    _fields_ = [("process", w.HANDLE), ("thread", w.HANDLE), ("pid", w.DWORD), ("tid", w.DWORD)]
+
+
+class SecurityCapabilities(c.Structure):
+    _fields_ = [("sid", w.LPVOID), ("capabilities", w.LPVOID), ("count", w.DWORD), ("reserved", w.DWORD)]
+
+
+class BasicJobLimits(c.Structure):
+    _fields_ = [
+        ("process_time", c.c_int64), ("job_time", c.c_int64), ("flags", w.DWORD),
+        ("minimum_working_set", c.c_size_t), ("maximum_working_set", c.c_size_t),
+        ("active_processes", w.DWORD), ("affinity", c.c_size_t), ("priority", w.DWORD), ("scheduling", w.DWORD),
+    ]
+
+
+class JobLimits(c.Structure):
+    _fields_ = [("basic", BasicJobLimits), ("io", c.c_uint64 * 6), ("memory", c.c_size_t * 4)]
+
+
+def copy_tree(source, target):
+    target.mkdir()
+    for child in source.iterdir():
+        info = child.lstat()
+        if info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            # Like an unmounted target on Linux, the link cannot expose host files.
+            continue
+        destination = target / child.name
+        if stat.S_ISDIR(info.st_mode):
+            copy_tree(child, destination)
+        elif stat.S_ISREG(info.st_mode):
+            shutil.copyfile(child, destination)
+
+
+def run(root, runtime, workspace, relative, command):
+    free_memory = api(kernel, "LocalFree", w.LPVOID, w.LPVOID)
+    close_handle = api(kernel, "CloseHandle", w.BOOL, w.HANDLE)
+    parse = api(shell, "CommandLineToArgvW", c.POINTER(w.LPWSTR), w.LPCWSTR, c.POINTER(c.c_int))
+    argc = c.c_int()
+    raw_argv = checked(parse(command, c.byref(argc)))
+    try:
+        argv = raw_argv[:argc.value]
+    finally:
+        free_memory(raw_argv)
+    if not argv or argv[0].lower() not in ("python", "python3", "pytest"):
+        raise ValueError("Pass one managed python, python3 or pytest command.")
+    args = (["-m", "pytest"] if argv[0].lower() == "pytest" else []) + argv[1:]
+
+    # Only disposable copies receive AppContainer ACLs.
+    project_copy = root / "project"
+    runtime_copy = root / "runtime"
+    scratch = root / "scratch"
+    copy_tree(workspace, project_copy)
+    copy_tree(runtime, runtime_copy)
+    scratch.mkdir()
+    executable = runtime_copy / "python.exe"
+    system_root = Path(os.environ["SystemRoot"])
+    icacls = system_root / "System32" / "icacls.exe"
+
+    with ExitStack() as resources:
+        sid = w.LPVOID()
+        derive = api(userenv, "DeriveAppContainerSidFromAppContainerName", w.LONG, w.LPCWSTR, c.POINTER(w.LPVOID))
+        result = derive("StratCraft.OpenCode.LocalTest." + uuid.uuid4().hex, c.byref(sid))
+        if result:
+            raise OSError(f"Could not derive the local-test AppContainer SID (HRESULT {result:#x})")
+        resources.callback(api(advapi, "FreeSid", w.LPVOID, w.LPVOID), sid)
+        sid_text = w.LPWSTR()
+        checked(api(advapi, "ConvertSidToStringSidW", w.BOOL, w.LPVOID, c.POINTER(w.LPWSTR))(sid, c.byref(sid_text)))
+        resources.callback(free_memory, sid_text)
+        ace = "*" + sid_text.value
+        for directory, rights in ((root, "RX"), (project_copy, "(OI)(CI)RX"), (runtime_copy, "(OI)(CI)RX"), (scratch, "(OI)(CI)M")):
+            subprocess.run([icacls, directory, "/grant", f"{ace}:{rights}"], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run([icacls, scratch, "/setintegritylevel", "(OI)(CI)L"], check=True, stdout=subprocess.DEVNULL)
+
+        job = checked(api(kernel, "CreateJobObjectW", w.HANDLE, w.LPVOID, w.LPCWSTR)(None, None))
+        resources.callback(close_handle, job)
+        limits = JobLimits()
+        limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        checked(api(kernel, "SetInformationJobObject", w.BOOL, w.HANDLE, c.c_int, w.LPVOID, w.DWORD)(
+            job, 9, c.byref(limits), c.sizeof(limits)))  # JobObjectExtendedLimitInformation
+
+        init = api(kernel, "InitializeProcThreadAttributeList", w.BOOL, w.LPVOID, w.DWORD, w.DWORD, c.POINTER(c.c_size_t))
+        update = api(kernel, "UpdateProcThreadAttribute", w.BOOL, w.LPVOID, w.DWORD, c.c_size_t, w.LPVOID, c.c_size_t, w.LPVOID, w.LPVOID)
+        size = c.c_size_t()
+        init(None, 4, 0, c.byref(size))
+        attributes = c.create_string_buffer(size.value)
+        checked(init(attributes, 4, 0, c.byref(size)))
+        resources.callback(api(kernel, "DeleteProcThreadAttributeList", None, w.LPVOID), attributes)
+
+        descriptors = []
+        for acquire in (lambda: os.open(os.devnull, os.O_RDONLY), lambda: os.dup(1), lambda: os.dup(2)):
+            fd = acquire()
+            resources.callback(os.close, fd)
+            os.set_inheritable(fd, True)
+            descriptors.append(fd)
+        handles = (w.HANDLE * 3)(*(msvcrt.get_osfhandle(fd) for fd in descriptors))
+        capabilities = SecurityCapabilities(sid, None, 0, 0)
+        jobs = (w.HANDLE * 1)(job)
+        packages_policy = w.DWORD(1)  # PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT
+        for attribute, value in (
+            (0x20002, handles),  # PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+            (0x20009, capabilities),  # PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
+            (0x2000D, jobs),  # PROC_THREAD_ATTRIBUTE_JOB_LIST
+            (0x2000F, packages_policy),  # PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY
+        ):
+            checked(update(attributes, 0, attribute, c.byref(value), c.sizeof(value), None, None))
+
+        startup = StartupInfoEx()
+        startup.startup.size = c.sizeof(startup)
+        startup.startup.position_and_size[7] = 0x100  # STARTF_USESTDHANDLES
+        startup.startup.stdin, startup.startup.stdout, startup.startup.stderr = handles
+        startup.attributes = c.cast(attributes, w.LPVOID)
+        process = ProcessInfo()
+        create = api(kernel, "CreateProcessW", w.BOOL, w.LPCWSTR, w.LPWSTR, w.LPVOID, w.LPVOID, w.BOOL,
+                     w.DWORD, w.LPVOID, w.LPCWSTR, c.POINTER(StartupInfoEx), c.POINTER(ProcessInfo))
+        environment = {
+            "SystemRoot": str(system_root),
+            "PATH": os.pathsep.join(str(entry) for entry in (runtime_copy, runtime_copy / "Library" / "bin", system_root / "System32")),
+            "TEMP": str(scratch),
+            "TMP": str(scratch),
+            "USERPROFILE": str(scratch),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        block = c.create_unicode_buffer("\0".join(f"{key}={environment[key]}" for key in sorted(environment, key=str.upper)) + "\0")
+        line = c.create_unicode_buffer(subprocess.list2cmdline([str(executable), "-E", "-s", "-B", *args]))
+        # EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW
+        checked(create(str(executable), line, None, None, True, 0x08080400, block,
+                       str(project_copy / relative), c.byref(startup), c.byref(process)))
+        resources.callback(close_handle, process.thread)
+        resources.callback(close_handle, process.process)
+        wait = api(kernel, "WaitForSingleObject", w.DWORD, w.HANDLE, w.DWORD)
+        if wait(process.process, 0xFFFFFFFF) != 0:  # WAIT_OBJECT_0
+            raise c.WinError(c.get_last_error())
+        code = w.DWORD()
+        checked(api(kernel, "GetExitCodeProcess", w.BOOL, w.HANDLE, c.POINTER(w.DWORD))(process.process, c.byref(code)))
+        return code.value
+
+
+try:
+    sys.exit(run(*(Path(arg) for arg in sys.argv[1:5]), sys.argv[5]))
+except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    sys.exit(f"Could not run the isolated Python check: {error}")
